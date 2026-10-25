@@ -76,38 +76,42 @@ static inline uint32_t bitn(lz_t*L){
 static inline uint8_t rbyte(lz_t*L,uint32_t a){ return (a>=L->dst&&a-L->dst<L->cap)?L->out[a-L->dst]:0; }
 static inline void wbyte(lz_t*L,uint32_t a,uint8_t v){ if(a>=L->dst&&a-L->dst<L->cap) L->out[a-L->dst]=v; }
 
-// slow-chain: hardware get8 body (0x5596E..0x559E9) unrolled semantics:
-//  - entry with ebx==0: shr(0)→je 0x5599F: load dword, VALUE BYTE = dword&0xFF
-//    (mov al,bl keeps acc high bits), then rcr+shr7.
-//  - mid-chain shr zeroes ebx: load+rcr, THIS adc is SKIPPED (pending bit replays
-//    from bit31 31 shifts later).
-//  - last-position shr zeroes ebx (0x559E2 path): load+rcr then ADC the post-rcr CF.
+// slow-chain: hardware get8 bodies (verified against 600-step instruction trace):
+//  - 8-bit chain head @0x5596E: ENTRY ebx==0 or shr#1 zeroing ebx -> 0x5599F full-byte
+//    (value = dword&0xFF into acc low byte; ebx=(pend<<24)|(dword>>8)).
+//  - ANY shr that zeroes ebx (je jmps to the ADC): load+RCR (lost bit replays from
+//    bit31 later) and POST-RCR CF is accumulated as this bit's value.
+static uint32_t chain8(lz_t*L,uint32_t acc){
+    if(L->ebx==0){
+        L->ebx=rd32(L,L->esi); L->esi-=4;
+        uint32_t v=L->ebx&0xFF; rcr1(L); L->ebx>>=7;
+        return (acc & ~0xFFu) | v;
+    }
+    shr1(L);
+    if(L->ebx==0){
+        L->ebx=rd32(L,L->esi); L->esi-=4;
+        uint32_t v=L->ebx&0xFF; rcr1(L); L->ebx>>=7;
+        return (acc & ~0xFFu) | v;
+    }
+    acc=((acc<<1)|L->cf);
+    for(int j=1;j<8;j++){
+        shr1(L);
+        if(L->ebx==0){ L->ebx=rd32(L,L->esi); L->esi-=4; rcr1(L); }
+        acc=((acc<<1)|L->cf);
+    }
+    return acc;
+}
 static uint32_t chainN(lz_t*L,uint32_t acc,int n){
     for(int j=0;j<n;j++){
-        if(L->ebx==0){
-            L->ebx=rd32(L,L->esi); L->esi-=4;
-            uint32_t v=L->ebx&0xFF; rcr1(L); L->ebx>>=7;      // 0x5599F
-            return (acc & ~0xFFu) | v;
-        }
         shr1(L);
-        if(L->ebx==0){
-            if(j==0 && n==8){                                   // 0x5599F belongs to the 8-bit get8 chain ONLY
-                L->ebx=rd32(L,L->esi); L->esi-=4;
-                uint32_t v=L->ebx&0xFF; rcr1(L); L->ebx>>=7;
-                return (acc & ~0xFFu) | v;
-            }
-            L->ebx=rd32(L,L->esi); L->esi-=4; rcr1(L);
-            if(j==n-1){ acc=((acc<<1)|L->cf); break; }          // 0x559E2 tail (1-bit chain)
-            continue;                                            // mid je-tail: skip adc
-        }
+        if(L->ebx==0){ L->ebx=rd32(L,L->esi); L->esi-=4; rcr1(L); }
         acc=((acc<<1)|L->cf);
     }
     return acc;
 }
 static uint32_t get8(lz_t*L){
     if(L->ebx>=0x100){ uint32_t v=L->ebx&0xFF; L->cf=(L->ebx>>7)&1; L->ebx>>=8; return v; }
-    // NOTE hardware: cmp ebx,0x100 / jb slow. Slow path starts with acc=0 (caller xor eax,eax)
-    return chainN(L,0,8);
+    return chain8(L,0);
 }
 // fast takeN when ebx has >= n bits guaranteed by gate; else get8 + chain(needed-8)
 static uint32_t takeGate(lz_t*L,int gate,int n){
@@ -138,8 +142,8 @@ int bleem_lz_decompress(const uint8_t *img, uint32_t io, uint32_t sb, uint8_t *o
                 // 2-byte match, offset = get8 (hw 0x557c6: sub edi,2; d=get8; copy [edi+d+1],[edi+d+2])
                 leaf("WORD2",&L);
                 L.edi-=2; uint32_t d=get8(&L)&0xFF;
+                wbyte(&L,L.edi+2,rbyte(&L,L.edi+d+2));   // hw order: +2 first
                 wbyte(&L,L.edi+1,rbyte(&L,L.edi+d+1));
-                wbyte(&L,L.edi+2,rbyte(&L,L.edi+d+2));
             }
         } else {
             uint32_t c1=bitn(&L);
@@ -149,17 +153,17 @@ int bleem_lz_decompress(const uint8_t *img, uint32_t io, uint32_t sb, uint8_t *o
                     // 3-byte match (gate 0x200 / 9b; slow 8+1)  hw 0x5591f
                     leaf("M3",&L);
                     L.edi-=3; uint32_t d=takeGate(&L,0x200,9);
-                    wbyte(&L,L.edi+1,rbyte(&L,L.edi+d+1));
-                    wbyte(&L,L.edi+2,rbyte(&L,L.edi+d+2));
                     wbyte(&L,L.edi+3,rbyte(&L,L.edi+d+3));
+                    wbyte(&L,L.edi+2,rbyte(&L,L.edi+d+2));
+                    wbyte(&L,L.edi+1,rbyte(&L,L.edi+d+1));
                 } else {
                     // 4-byte match (gate 0x400 / 10b; slow 8+2)  hw 0x558d7
                     leaf("M4",&L);
                     L.edi-=4; uint32_t d=takeGate(&L,0x400,10);
-                    wbyte(&L,L.edi+1,rbyte(&L,L.edi+d+1));
-                    wbyte(&L,L.edi+2,rbyte(&L,L.edi+d+2));
-                    wbyte(&L,L.edi+3,rbyte(&L,L.edi+d+3));
                     wbyte(&L,L.edi+4,rbyte(&L,L.edi+d+4));
+                    wbyte(&L,L.edi+3,rbyte(&L,L.edi+d+3));
+                    wbyte(&L,L.edi+2,rbyte(&L,L.edi+d+2));
+                    wbyte(&L,L.edi+1,rbyte(&L,L.edi+d+1));
                 }
             } else {
                 uint32_t c2=bitn(&L);
