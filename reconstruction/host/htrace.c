@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <sys/mman.h>
 #include <signal.h>
+#include <setjmp.h>
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -20,8 +21,36 @@ uint32_t bios_map_cb_c(void){
     return 0xBFC00000u;
 }
 uint32_t arena_bump=0x2a1000;
+static uint32_t allocs[64];static uint32_t alloc_sz[64];static int nalloc;
+static uint8_t pre_copy[0x40000];
+static jmp_buf die_env;
+static uint32_t *cb_g;
+static void dump_blocks(void){
+    FILE*bf=fopen("host/build/blocks.txt","w"); if(!bf) return;
+    uint32_t wins[]={0x38,0x3c,0x40,0x44,0x48,0x4c,0x50,0x54,0x58,0x5c,0x24,0x28,0x2c};
+    if(!cb_g){ fclose(bf); return; }
+    for(unsigned w=0;w<sizeof wins/sizeof*wins;w++){
+        uint32_t b=cb_g[wins[w]/4]; if(!b||b==1) continue;
+        if(!((b>=0x2a1000u&&b<0x2e100000u)||(b>=0x00400000u&&b<0x64000000u))) continue;   /* 只读已映射块 */
+        int nz=0,c3=0; unsigned char*pb=(unsigned char*)b; unsigned lim=0x40000;
+        for(int q=0;q<nalloc;q++) if(allocs[q]==b && alloc_sz[q]) lim=alloc_sz[q];
+        if(b+lim>0x400000u && b<0x400000u) lim=0x400000u-b;      /* 不越界进 img */
+        if(b==0x3e1000u && lim<=0x40000u){
+            unsigned char*pc=pre_copy; unsigned wr=0,c3w=0;
+            for(unsigned i=0;i<lim;i++) if(pb[i]!=pc[i]){ wr++; if(pb[i]==0xC3)c3w++; }
+            fprintf(bf,"CTRL-BLK 0x3e1000 len=%x engine_written=%d (of which C3=%d)\n",lim,wr,c3w);
+            unsigned shown=0;
+            for(unsigned i=0;i<lim && shown<6;i++) if(pb[i]!=pc[i]){
+                fprintf(bf,"  @+%05x: pre=%02x post=%02x\n",i,pc[i],pb[i]); shown++; }
+        }
+        for(unsigned i=0;i<lim;i++){ unsigned v=pb[i]; if(v){nz++; if(v==0xC3)c3++;} }
+        fprintf(bf,"cb+0x%02x blk=%08x len=%x nonzero=%d C3=%d\n",wins[w],b,lim,nz,c3);
+        fprintf(bf,"  head:"); for(int i=0;i<48;i++) fprintf(bf,"%02x",pb[i]); fprintf(bf,"\n");
+    }
+    fclose(bf);
+}
+
 static uint32_t cb_snap[0x1000];
-static uint32_t allocs[64];static int nalloc=0;
 uint32_t sVA_impl(void*addr,uint32_t size,uint32_t type,uint32_t prot){
     (void)prot;
     /* VirtualFree 复用槽0（2 参）：栈上 [esp+4]=addr [esp+8]=flags(0x10001=MEM_RELEASE) */
@@ -34,14 +63,13 @@ uint32_t sVA_impl(void*addr,uint32_t size,uint32_t type,uint32_t prot){
     size=(size+0xffff)&~0xffffu; if(!size) size=0x10000;
     uint32_t r=arena_bump; arena_bump+=size;
     if(arena_bump>=0x2a1000+0x04000000) return (uint32_t)-1;
-    if(nalloc<64)allocs[nalloc++]=r;
+    if(nalloc<64){allocs[nalloc]=r; alloc_sz[nalloc]=size; nalloc++;}
     fprintf(stderr,"[VA %#x -> %#x]\n",size,r);
     return r;
 }
 uint32_t __attribute__((stdcall)) sVA(void*a,uint32_t sz,uint32_t t,uint32_t p){return sVA_impl(a,sz,t,p);}
 
 static uint8_t *IMG;
-static uint32_t *cb_g;
 static volatile int tracing=0, range_lo=0x400004, range_hi=0x400300;
 static FILE*logf;
 
@@ -93,7 +121,7 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
             recovered++;
             if(recovered<=200) fprintf(logf,"RECOVER-ARENA #%d arena-call@%08x -> ret %08x\n",recovered,eip,ret);
             fflush(logf);
-            if(recovered>200){ _exit(4); }
+            if(recovered>200){ dump_blocks(); _exit(4); }
             u->uc_mcontext.gregs[REG_EFL]|=0x100;
             return;
         }
@@ -153,7 +181,7 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         _exit(4);
     }
     fprintf(logf,"SEGV-FATAL eip=%08x addr=%p recovered_before=%d\n",eip,si->si_addr,recovered);
-    fflush(logf);fclose(logf);_exit(3);
+    fflush(logf); siglongjmp(die_env,1);
 }
 
 int main(int argc,char**argv){
@@ -183,7 +211,10 @@ int main(int argc,char**argv){
     /* seed TF via asm: pushf/or/popf — the handler re-arms stepping each trap */
     __asm__ volatile("pushfl; orl $0x100, (%%esp); popfl" ::: "memory");
     memcpy(cb_snap,cb,0x4000);
-    call_engine(0x400004u,(uint32_t)(uintptr_t)cb);
+    memcpy(pre_copy,(void*)0x3e1000,0x40000);   /* 128KB 控制块 init 前快照 */
+    if(sigsetjmp(die_env,1)==0){ call_engine(0x400004u,(uint32_t)(uintptr_t)cb); }
+    else { fprintf(logf,"[htrace] fatal-recover: dump blocks and report\n"); }
+    fflush(logf); dump_blocks();
     fprintf(logf,"returned\n");
     { FILE*df=fopen("host/build/cb_diff_htrace.txt","w");
       if(df){ for(int i=0;i<0x1000;i++) if(cb[i]!=cb_snap[i]&&cb[i]) fprintf(df,"+%04x=%08x\n",i*4,cb[i]); fclose(df);} }
