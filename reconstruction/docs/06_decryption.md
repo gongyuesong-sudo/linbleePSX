@@ -1,0 +1,79 @@
+# 06 — payload.bin 解密：PSX 引擎完整还原记录
+
+日期：2026-10-25（北京时间）。对象：`rewrite/data/payload.bin`（= `demo-v1_4.EXE` 文件偏移
+0xFA00..EOF 的 287,732 字节追加区）。目标：解密并反编译其中的 PSX 引擎。
+
+## 结论（先行）
+
+追加区不是强加密，而是 bleem 自研的**自定义位流 LZ 自解压包**（RCR 进位链 + 幻影位）。
+全部 3 个压缩流已在原生 Linux x86 上用它自己的明文解压器解出，共 473,417 字节明文：
+
+| 流头偏移 | 解压长度 | 内容 | 产物文件 |
+|---|---|---|---|
+| 0x0facc | 0x00BA3 (2,979) | 引导辅助模块（数据表+小桩） | `decrypted/stream_0facc_Lba3.bin` |
+| 0x1015c | 0x10E7 (4,327) | 控制器模块（DirectInput/手柄映射，含 "bleem! Controller Settings" 等字符串） | `decrypted/stream_1015c_L10e7.bin` |
+| 0x10a4c | 0x71CBF (466,111) | **PSX 引擎本体**（DirectDraw/DirectSound/GTE/GPU/CD-ROM，含 "DDRAW."、":\\PSX.EXE"） | `decrypted/stream_10a4c_L71cbf.bin` |
+
+正确性证明（三条独立证据）：
+1. 每个流解压结束时位源指针精确停在 `流头+4`（0x410a50 = img+0x10a50）——数据恰好耗尽，零字节错位。
+2. 明文区 `[0x55338,0x55DF4)` 的 RAND 折叠校验和与块表 `0xFA58` 存储值 `0x4D24AF3D` 完全一致，证明校验算法与块表解析正确。
+3. 解出的三个流头 dword0 是模块数据表指针（0xe/0x9e/0x322）、+4 处是 `pushad; mov esi,[eax+0x170]` 型序言，正文含大量可读字符串与 x86 代码结构。
+
+## 包格式（完整逆向规格）
+
+### 块表（追加区开头）
+- 0xFA00: 一级引导桩 `lea edi,[esi+0xc]; ret`（置表基址=0xFA0C，同时充当首个"解压器"）
+- 0xFA0C 起 16 字节条目：`{+0 dst_rva|bit0调用|bit1重定位, +4 依赖流偏移, +8 RAND校验和, +C 区域结束}`；
+  区域首尾链式相接：`0xfab7 → 0x1014f → 0x10a4e → 0x55338 → 0x55df4`
+- 区域字段是逻辑分界；真实流头以指针表（含 bit0=需解压/bit1=带重定位标志）给出，按 4 字节对齐向下取整。
+
+### 流头（每个压缩流开头 8 字节）
+- `dword[0]` = 解压输出长度 L
+- `dword[1]` = 位源跳距 J；初始位指针 ESI = 流头 + J（流尾）
+- 压缩数据占据 `[流头+8, 流头+J)`，位流从 J 处**向低地址**读取（每 4 字节一个 dword）
+
+### 位引擎（从 0x5577A..0x5599F 明文逐指令还原）
+- 状态：EBX 位缓冲、CF 持久进位、ESI 递减 dword 指针
+- 每次消费位：若 EBX≠0 → `SHR EBX,1`；若 EBX==0 → 载入新 dword 后 `RCR EBX,1`。
+  **幻影位规则**：使缓冲恰好归零的那颗移出位，会在下次装载时被旋转进新 dword 的 bit31（33 位自同步链）
+- `get8`：EBX≥0x100 时快路径 `AL=BL; SHR EBX,8`（位0=值LSB，CF=位7）；否则 8 次链式消费、
+  `ADC EAX,EAX` 累加（先进位=值MSB）；首次移位归零走 0x5599F 特殊尾巴（直取新 dword 低 8 位，SHR 7）
+- 多bit直取域（12/10/9 位窗口延续）同样按 LSB-first 解释并更新 CF
+
+### 令牌树（解压主循环 0x5577A）
+```
+bit1=0 ─┬─ bit1=0: 短字面量串：1 位长度(0/1)，写 len+1 字节 get8
+        └─ bit1=1: 2 字节匹配：距离 = get8（读 [EDI+d8+1..2]）
+bit1=1 ─┬─ bit1=0 ─┬─ bit1=0: 3 字节匹配（距离：缓冲≥0x200 时 9 位直取，否则 get8+1位链接）
+        │          └─ bit1=1: 4 字节匹配（10 位直取 或 get8+1位）
+        └─ bit1=1 ─┬─ bit1=0: 长匹配 len=get8+5；距离 12 位直取 或 get8+1位（REP MOVSB 方向=向下）
+                   └─ bit1=1: 长字面量串 9+get8 字节
+循环终止：EDI < EBP（输出基址）
+```
+
+### 模块布局与装载
+- 模块 = `{dword 数据表偏移, 代码..., 数据表}`；运行时入口 = 流内容 +4
+- 装载器（明文桩 0x5546D）：汇总尺寸 → 两级 VirtualAlloc(RW) → 顺序解压 →
+  重定位链（bit1 流：`add esi,[esi-2]` 指向流前负偏移处的重定位表）→ 指针表
+  （img+0x10068 起 {槽索引, 偏移/值} 对）填入 alloc 绝对地址 → 引擎表把 API 桩
+  `mov eax,0x4022a4; add eax,delta` 指向真实 Win32 导入（GetVersionExA 起 79 项，0x4022a4+idx*4）
+
+## 引擎身份证据（解密后 154 个函数 / 523 条字符串）
+- `DDRAW.DLL / DSOUND.DLL / :\\PSX.EXE / bleem! Controller Settings / FrameSkip / %d Hz / %dx%d %d-bit`
+- 引擎入口 `+0x4`：三连 `VirtualAlloc(0x10000)` 于 +0x80000/+0x80000+0xa0000/+0x20000 区域
+  （含 +0xa0000 = 640KB 段 —— PSX 主 RAM 尺寸）、结果写入控制块 +0x34/+0x38/+0x3c/+0x40 槽
+- `FUN_0002a038`：同族 RCR 位流解压器（内层资产解压器，支持双向拷贝 bVar11）——引擎资源按需解压
+- `FUN_0002d703 / FUN_0003ba8d` 等成组小函数：GPU 指令/状态机形态；数据表 0x322 处内嵌 "DDRAW."
+
+## 工具（本次新增，全部原生 Linux，无 Wine、未执行任何加密代码——执行的仅是 2.7KB 明文解压器）
+- `tools/native_unpack/scan2.c + tramp.s`：原生 harness。mmap 映像后在真 CPU 上调用
+  明文解压器（0x45577a）暴力识别所有流并按位源耗尽判据落盘。`gcc -m32` 编译。
+- `tools/native_unpack/needseed.c`：单流定点解压 + 校验反解。
+- `bleem_unpack.py`（.analysis）：纯 Python 逐指令转写（用于交叉验证格式理解）。
+- `decompiled/eng_*.json / mod2_*.json`：REA(Ghidra 12.1.4) 对解密模块的函数伪代码
+  （快照 `.analysis/engine2-snapshot.json`，154 函数已枚举）。
+
+## 未竟事项
+- 重定位表位1链的逐条应用与再基址（当前按原映像坐标分析，引用自洽；若要跨基址重定位需逐条应用）
+- 引擎 154 函数的全量反编译（已交付 12 个代表函数伪代码；快照可继续批量导出）
+- 把引擎接到 bleem_port（Vulkan/X11+Wayland 宿主）需要实现其 Win32 API 依赖与 DDraw/DSound 后端——独立大工程

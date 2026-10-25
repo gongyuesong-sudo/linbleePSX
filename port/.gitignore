@@ -1,0 +1,5 @@
+build/
+dumps/
+sandbox/
+*.o
+.harness-*.lock

@@ -1,0 +1,55 @@
+/*
+ * 重建工程的 Windows 资源脚本 —— 从原 .rsrc (VA 0x403000, 56KB) 提取。
+ * 版本信息与原版逐字一致 (Evidence: analysis/res/16_1.bin 解析)。
+ * 图标/对话框保持原始二进制 (data/*.bin), 见 tools/rebuild_resources.py。
+ */
+#include <winuser.h>
+
+/* ---- VS_VERSION_INFO (原 /16/1/1033, 956B) ---- */
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,4,0,0
+ PRODUCTVERSION 1,4,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904e4"
+        BEGIN
+            VALUE "Comments",           "Written by: Randy Linden"
+            VALUE "CompanyName",        "bleem, llc."
+            VALUE "FileDescription",    "bleem!"
+            VALUE "FileVersion",        "1.4"
+            VALUE "InternalName",       "RED"
+            VALUE "LegalCopyright",     "Copyright \xA9 1998-1999 bleem, llc."
+            VALUE "LegalTrademarks",    "bleem is a trademark of bleem, llc.  All Rights Reserved."
+            VALUE "OriginalFilename",   "bleem!"
+            VALUE "ProductName",        "bleem!"
+            VALUE "ProductVersion",     "1.4"
+            VALUE "SpecialBuild",       "Demo Release"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1252
+    END
+END
+
+/*
+ * 对话框模板清单 (原文本全量见 docs/04_ui.md; 原模板二进制逐字节保留在
+ * data/type5_id*.bin, 由 tools/dump_resources.py 提取; 原模板含非标准
+ * 头部 [未知布局], windres 无法逐字节复现, 故不在此重述):
+ *   4001  About bleem! (Demo Release)     11001 Full Screen 配置页
+ *   12001 Windowed Mode                   13001 3D Hardware
+ *   14001 Advanced                        15001 Sound (demo 中禁用)
+ *   17001 Video (黑白电影)                18001 CD Drive 选择
+ *   20001 自动手柄映射                    21001/22001 Controller 1/2
+ *   25001/25002 轴校准                    30003 demo 结束推销框
+ *   30004 EULA 确认                       30005 不兼容游戏框
+ *   30008 "请放入游戏 CD" (Retry/Quit)    30009/30010 兼容性报告
+ *   30011 未命名小对话框
+ * 图标: 25 组 (RT_ICON 1..25 + RT_GROUP_ICON), 光标 1 组, 原样存 data/。
+ */

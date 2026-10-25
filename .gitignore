@@ -1,0 +1,13 @@
+build/
+*.o
+*.pyc
+__pycache__/
+data/
+dumps/
+*.bin
+*.EXE
+*.exe
+*.ppm
+sandbox/
+harness-*
+.harness-active
