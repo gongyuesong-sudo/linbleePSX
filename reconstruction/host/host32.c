@@ -19,12 +19,14 @@
 #include <unistd.h>
 
 extern void call_engine(uint32_t entry, uint32_t cb);  /* tramp32.s */
+extern void host_service_cb(void);
 void finish(int fromsignal);
+extern uint32_t svc_call(uint32_t);
 
 #define ARENA_BASE 0x2a1000u
 #define ARENA_SIZE 0x04000000u   /* 常驻 64 MB RWX：img 把 alloc 指针当 int 存，高地址会溢出 */
 
-static uint32_t arena_bump = ARENA_BASE;
+uint32_t arena_bump = ARENA_BASE;
 static uint32_t bios_region = 0;
 static uint32_t allocs[64]; static int nalloc = 0;
 
@@ -32,10 +34,7 @@ static uint32_t allocs[64]; static int nalloc = 0;
  * 调用方固定压 4 参（含 eax 值），栈序 [0]=size [4]=hint [8]=type/flags [12]=protect
  * → 本 shim 按 stdcall 清 16 字节，size 取栈上第一个压入值。 */
 /* BIOS 映射回调：签名 = 引擎 call [esp] 约定，返回 BIOS 基址 */
-/* BIOS 映射回调（img+0x191 call [esp] 协议）：
- * 引擎随后 `sub eax,0xBFC00000` → 必须返回 PSX 规范基址 0xBFC00000，
- * 并保证该 VAS 有映射（host 低位 BIOS 区 + 512K 恒等区）。*/
-uint32_t bios_map_cb(void){
+uint32_t bios_map_cb_c(void){
     void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE,
                 MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(m!=(void*)0xBFC00000u){ printf("[host] bios map fail\n"); return bios_region; }
@@ -48,6 +47,7 @@ uint32_t bios_map_cb(void){
 uint32_t __attribute__((stdcall)) sVA(void *addr, uint32_t size, uint32_t type, uint32_t prot){
     (void)type;(void)prot;
     /* 槽0 复用协议：VirtualFree(h,flags) 2 参也打到这里 — flags 落在 size 位 */
+    if(addr==(void*)0x2a0000u){ printf("[host] svc VP/Query(0x2a0000) -> 0x104\n"); return 0x104; }
     if((size&0xffffu)==0x0001u && size>=0x10001u && size<=0x1000ffffu){
         printf("[host] FREE %#x flags=%#x\n",(uint32_t)(uintptr_t)addr,size);
         return 1;
@@ -78,12 +78,26 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         uint32_t*st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
         while(k<24){ uint32_t c=st[k]; if(c>=0x400000&&c<0x472000){ ret=c; break; } k++; }
         if(ret){
+            /* 服务派发：BIOS(0)→恒等映射；尺寸→arena bump 页对齐分配 */
+            uint32_t eax_in=(uint32_t)u->uc_mcontext.gregs[REG_EAX];
+            uint32_t r0;
+            if(eax_in==0){ r0=bios_map_cb_c(); }
+            else { uint32_t sz=(eax_in+0xffff)&~0xffffu; if(!sz)sz=0x10000;
+                   r0=arena_bump; arena_bump+=sz;
+                   if(arena_bump>=ARENA_BASE+ARENA_SIZE){ r0=(uint32_t)-1; arena_bump-=sz; }
+                   printf("[host] svc alloc %#x -> %#x\n", sz, r0); }
             u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
-            u->uc_mcontext.gregs[REG_EAX]=(ret==0x400194u)?0xBFC00000u:0u;
+            u->uc_mcontext.gregs[REG_EAX]=r0;
             u->uc_mcontext.gregs[REG_EIP]=ret;
-            printf("[host] slot-recover eip=%08x -> %08x eax=%08x\n",eip,ret,u->uc_mcontext.gregs[REG_EAX]); fflush(stdout);
+            if(ret==0x4002cd) printf("[host] CB-SVC ret=0x2cd (BIOS-read cb) eax_in=%08x out=%08x\n",eax_in,r0);
+            fflush(stdout);
             return;
         }
+    }
+    if(eip==0x40029c && cb_g){   /* popa 后 edi 污染：恢复 edi=cb 重放 +0x254..0x25c 写入 */
+        u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;
+        printf("[host] store-recover@29c edi<-cb (ebx=%08x ecx=%08x edx=%08x)\n",(uint32_t)u->uc_mcontext.gregs[REG_EBX],(uint32_t)u->uc_mcontext.gregs[REG_ECX],(uint32_t)u->uc_mcontext.gregs[REG_EDX]); fflush(stdout);
+        return;
     }
     if(eip>=0x400000&&eip<0x472000 && (uint32_t)(uintptr_t)si->si_addr<0x1000 && cb_g && eip!=0x40017b){
         u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;   /* store replay */
@@ -128,9 +142,12 @@ int main(int argc,char**argv){
      * 引擎自身填写的代码占位（mov [ecx],eax 模式）——静态预填会破坏语义，禁止。*/
     tab[0]=(uint32_t)(uintptr_t)&sVA;
 
-    uint32_t*cb=mmap(NULL,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    uint32_t*cb=mmap((void*)0x50000,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
+    /* cb 头 = 通用服务跳板：call [esp] 命中 cb 基址(cb+0x68 未写时数值=cb)→ 跳 host_service_cb */
+    { uint8_t*th=(uint8_t*)cb;   /* ret $4：吞掉 call [esp] 压入的返回地址，回引擎 */
+      th[0]=0xC2; th[1]=0x04; th[2]=0x00; }
 
-    cb[0x170/4]=(uint32_t)(uintptr_t)&bios_map_cb;  /* engine: push [cb+0x170]; later call [esp] -> BIOS-map cb */
+    cb[0x170/4]=(uint32_t)(uintptr_t)&host_service_cb;
 
     /* H-2：BIOS 映射回调槽 — 引擎 img+0x191 `call [esp]` 请求 host 把
      * 0xBFC00000 区映射并返回指针（img+0x1A4 sub eax,0xBFC00000 → cb+0x48 偏移）。

@@ -13,13 +13,13 @@
 
 extern void call_engine(uint32_t entry, uint32_t cb);
 static uint32_t bios_lo=0;
-uint32_t bios_map_cb_h(void){
+uint32_t bios_map_cb_c(void){
     if(!bios_lo){ if(mmap((void*)0x38000000u,0x80000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0)==MAP_FAILED) return 0; bios_lo=0x38000000u; }
     void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(m==(void*)0xBFC00000u){ memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000); return 0xBFC00000u; }
     return bios_lo;
 }
-static uint32_t arena_bump=0x2a1000;
+uint32_t arena_bump=0x2a1000;
 static uint32_t allocs[64];static int nalloc=0;
 uint32_t sVA_impl(void*addr,uint32_t size,uint32_t type,uint32_t prot){
     (void)prot;
@@ -99,24 +99,6 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         if(recovered<=120){ u->uc_mcontext.gregs[REG_EFL]|=0x100; return; }
         _exit(4);
     }
-    /* 通用数据槽 call 恢复：eip 非 img 区 = 引擎 call 了一个数值数据槽（跳板未接线）。
-     * 从栈上找最近的 img 返回地址，模拟返回 0。 */
-    if(!(eip>=0x400000 && eip<0x472000)){
-        uint32_t *st=(uint32_t*)(uintptr_t)esp;
-        int k=0; uint32_t ret=0;
-        while(k<24){ uint32_t c=st[k]; if(c>=0x400000&&c<0x472000){ ret=c; break; } k++; }
-        if(ret){
-            u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
-            u->uc_mcontext.gregs[REG_EAX]=(ret==0x400194u)?0xBFC00000u:0u;   /* BIOS cb 语义 */
-            u->uc_mcontext.gregs[REG_EIP]=ret;
-            recovered++;
-            if(recovered<=120) fprintf(logf,"RECOVER-SLOT #%d slot@%08x -> ret %08x eax=%08x\n",recovered,eip,ret,u->uc_mcontext.gregs[REG_EAX]);
-            fflush(logf);
-            if(recovered>120){ fprintf(logf,"slot cap\n"); fflush(logf); _exit(4); }
-            u->uc_mcontext.gregs[REG_EFL]|=0x100;
-            return;
-        }
-    }
     fprintf(logf,"SEGV-FATAL eip=%08x addr=%p recovered_before=%d\n",eip,si->si_addr,recovered);
     fflush(logf);fclose(logf);_exit(3);
 }
@@ -134,9 +116,11 @@ int main(int argc,char**argv){
     if(v!=(void*)0x400000)return 3;
     IMG=v; if(fread(IMG,1,sz,f)!=(size_t)sz)return 4; fclose(f);
     ((uint32_t*)(IMG+0x22a4))[0]=(uint32_t)(uintptr_t)&sVA;
-    uint32_t*cb=mmap(NULL,0x4000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
-    cb[0x170/4]=(uint32_t)(uintptr_t)cb+0x200; cb_g=cb;
-    cb[0]=(uint32_t)(uintptr_t)&bios_map_cb_h;   /* slot0 BIOS-map callback */
+    uint32_t*cb=mmap((void*)0x50000,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
+    { extern void host_service_cb(void); uint8_t*th=(uint8_t*)cb;
+      th[0]=0xB8; *(uint32_t*)(th+1)=(uint32_t)(uintptr_t)&host_service_cb; th[5]=0xFF; th[6]=0xE0; }
+    cb[0x170/4]=(uint32_t)(uintptr_t)cb; cb_g=cb;
+
 
     struct sigaction sa;memset(&sa,0,sizeof sa);sa.sa_sigaction=ontrap;sa.sa_flags=SA_SIGINFO;
     sigaction(SIGTRAP,&sa,0);
