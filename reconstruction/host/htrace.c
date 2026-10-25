@@ -17,9 +17,10 @@ uint32_t bios_map_cb_c(void){
     if(!bios_lo){ if(mmap((void*)0x38000000u,0x80000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0)==MAP_FAILED) return 0; bios_lo=0x38000000u; }
     void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(m==(void*)0xBFC00000u){ memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000); return 0xBFC00000u; }
-    return bios_lo;
+    return 0xBFC00000u;
 }
 uint32_t arena_bump=0x2a1000;
+static uint32_t cb_snap[0x1000];
 static uint32_t allocs[64];static int nalloc=0;
 uint32_t sVA_impl(void*addr,uint32_t size,uint32_t type,uint32_t prot){
     (void)prot;
@@ -81,6 +82,53 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         u->uc_mcontext.gregs[REG_EFL]|=0x100;
         return;   /* 继续跑（handler 返回即恢复） */
     }
+    if((eip>=0x2a1000 && eip<0x2e100000) || eip==0x400000 || eip==0x400004){
+        /* call 进 arena/memtable/img 头（ROM 入口期望区）：返回 0 保命继续 */
+        uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
+        while(k<24){ uint32_t c=st[k]; if(c>=0x400010&&c<0x472000){ ret=c; break; } k++; }
+        if(ret){
+            u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
+            u->uc_mcontext.gregs[REG_EAX]=0;
+            u->uc_mcontext.gregs[REG_EIP]=ret;
+            recovered++;
+            if(recovered<=200) fprintf(logf,"RECOVER-ARENA #%d arena-call@%08x -> ret %08x\n",recovered,eip,ret);
+            fflush(logf);
+            if(recovered>200){ _exit(4); }
+            u->uc_mcontext.gregs[REG_EFL]|=0x100;
+            return;
+        }
+    }
+    if(eip<0x400000 && eip>=0x1000 && cb_g){
+        /* 服务/槽调用恢复（与生产 host 同语义）：找 img 返回地址，真跑 svc 分派 */
+        uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
+        while(k<24){ uint32_t c=st[k]; if(c>=0x400000&&c<0x472000){ ret=c; break; } k++; }
+        if(ret){
+            uint32_t eax_in=(uint32_t)u->uc_mcontext.gregs[REG_EAX]; uint32_t r0;
+            if(eax_in==0){ r0=bios_map_cb_c(); }
+            else if(eax_in==0x2a0000u){ r0=0x104; }
+            else if(eax_in==0x400004u || eax_in==0x400000u){ r0=eax_in; }  /* 真实函数指针：原样返回 */
+            else if(eax_in==0x400004u || eax_in==0x400000u){ r0=eax_in; }  /* 真实函数指针：原样返回 */
+            else { uint32_t sz=(eax_in+0xffff)&~0xffffu; if(!sz)sz=0x10000;
+                   r0=arena_bump; arena_bump+=sz;
+                   if(arena_bump>=0x2a1000+0x04000000){ r0=(uint32_t)-1; arena_bump-=sz; } }
+            u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
+            u->uc_mcontext.gregs[REG_EAX]=r0;
+            u->uc_mcontext.gregs[REG_EIP]=ret;
+            recovered++;
+            if(recovered<=160) fprintf(logf,"RECOVER-SVC #%d in=%08x out=%08x ret=%08x\n",recovered,eax_in,r0,ret);
+            fflush(logf);
+            if(recovered>160){ fprintf(logf,"cap\n"); fflush(logf); _exit(4); }
+            u->uc_mcontext.gregs[REG_EFL]|=0x100;
+            return;
+        }
+    }
+    if(eip==0x40029c && cb_g){
+        u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;
+        recovered++;
+        fprintf(logf,"RECOVER-29C #%d edi<-cb\n",recovered); fflush(logf);
+        if(recovered<=120){ u->uc_mcontext.gregs[REG_EFL]|=0x100; return; }
+        _exit(4);
+    }
     if(eip==0x40017b){
         /* 已知约定瑕疵：尺寸槽 edi 丢失 — 跳过 store，宿主补写 +0x30=8MB */
         cb_g[0x30/4]=0x800000;
@@ -91,6 +139,11 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         _exit(4);
     }
     /* img 内 store 到 0：edi/caller 丢 cb — 恢复 edi=cb 重放指令 */
+    if(eip==0x400005 && cb_g){   /* 第二轮 init：EAX 丢失 → 恢复 EAX=cb */
+        u->uc_mcontext.gregs[REG_EAX]=(uint32_t)(uintptr_t)cb_g;
+        printf("[host] reinit-recover@5 eax<-cb\n"); fflush(stdout);
+        return;
+    }
     if(eip>=0x400000&&eip<0x472000 && (uint32_t)(uintptr_t)si->si_addr<0x1000 && cb_g){
         u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;
         recovered++;
@@ -111,14 +164,14 @@ int main(int argc,char**argv){
     FILE*f=fopen(imgp,"rb");if(!f)return 1;
     fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);
     mmap((void*)0x2a1000,0x04000000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
+    memset((void*)0x2a1000,0xC3,0x04000000);   /* arena 页 = ret 滑地（与生产一致）*/
     memset((void*)0x2a1000,0xC3,0x04000000);
     void*v=mmap((void*)0x400000,12u<<20,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(v!=(void*)0x400000)return 3;
     IMG=v; if(fread(IMG,1,sz,f)!=(size_t)sz)return 4; fclose(f);
     ((uint32_t*)(IMG+0x22a4))[0]=(uint32_t)(uintptr_t)&sVA;
     uint32_t*cb=mmap((void*)0x50000,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
-    { extern void host_service_cb(void); uint8_t*th=(uint8_t*)cb;
-      th[0]=0xB8; *(uint32_t*)(th+1)=(uint32_t)(uintptr_t)&host_service_cb; th[5]=0xFF; th[6]=0xE0; }
+    { extern void host_service_cb(void); cb[0x68/4]=(uint32_t)(uintptr_t)&host_service_cb; }   /* 服务指针槽 */
     cb[0x170/4]=(uint32_t)(uintptr_t)cb; cb_g=cb;
 
 
@@ -129,7 +182,11 @@ int main(int argc,char**argv){
 
     /* seed TF via asm: pushf/or/popf — the handler re-arms stepping each trap */
     __asm__ volatile("pushfl; orl $0x100, (%%esp); popfl" ::: "memory");
+    memcpy(cb_snap,cb,0x4000);
     call_engine(0x400004u,(uint32_t)(uintptr_t)cb);
-    fprintf(logf,"returned\n");fclose(logf);
+    fprintf(logf,"returned\n");
+    { FILE*df=fopen("host/build/cb_diff_htrace.txt","w");
+      if(df){ for(int i=0;i<0x1000;i++) if(cb[i]!=cb_snap[i]&&cb[i]) fprintf(df,"+%04x=%08x\n",i*4,cb[i]); fclose(df);} }
+    fclose(logf);
     return 0;
 }

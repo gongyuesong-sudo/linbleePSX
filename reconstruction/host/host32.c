@@ -27,6 +27,8 @@ extern uint32_t svc_call(uint32_t);
 #define ARENA_SIZE 0x04000000u   /* 常驻 64 MB RWX：img 把 alloc 指针当 int 存，高地址会溢出 */
 
 uint32_t arena_bump = ARENA_BASE;
+static uint32_t cb_snap[0x1000];
+static int seg=0;
 static uint32_t bios_region = 0;
 static uint32_t allocs[64]; static int nalloc = 0;
 
@@ -35,13 +37,12 @@ static uint32_t allocs[64]; static int nalloc = 0;
  * → 本 shim 按 stdcall 清 16 字节，size 取栈上第一个压入值。 */
 /* BIOS 映射回调：签名 = 引擎 call [esp] 约定，返回 BIOS 基址 */
 uint32_t bios_map_cb_c(void){
-    void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE,
+    void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE|PROT_EXEC,
                 MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(m!=(void*)0xBFC00000u){ printf("[host] bios map fail\n"); return bios_region; }
-    /* 拷贝已备好的低位区内容（若有数据）*/
-    memcpy((void*)0xBFC00000u,(void*)bios_region,0x80000);
-    printf("[host] bios mapped @0xBFC00000\n");
-    return 0;   /* 让引擎走自带 ROM 自加载分支（blk 数据）*/
+    memset(m,0xC3,0x80000);   /* BIOS stub：ret 滑道（H-5 换 PSX.EXE JIT 码）*/
+    printf("[host] bios mapped @0xBFC00000 (ret-sled)\n");
+    return 0xBFC00000u;   /* 引擎契约：返回 PSX BIOS 基址 */
 }
 
 uint32_t __attribute__((stdcall)) sVA(void *addr, uint32_t size, uint32_t type, uint32_t prot){
@@ -99,6 +100,19 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         printf("[host] store-recover@29c edi<-cb (ebx=%08x ecx=%08x edx=%08x)\n",(uint32_t)u->uc_mcontext.gregs[REG_EBX],(uint32_t)u->uc_mcontext.gregs[REG_ECX],(uint32_t)u->uc_mcontext.gregs[REG_EDX]); fflush(stdout);
         return;
     }
+    if(eip>=0xBFC00000u && eip<0xBFC80000u && cb_g){
+        uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
+        while(k<24){ uint32_t c=st[k]; if(c>=0x400010&&c<0x472000){ ret=c; break; } k++; }
+        if(ret){ u->uc_mcontext.gregs[REG_EIP]=ret; u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
+                 u->uc_mcontext.gregs[REG_EAX]=0;
+                 printf("[host] bios-sled return -> %08x\n", ret);
+                 if(++seg>=900) finish(1); return; }
+    }
+    if(eip==0x400005 && cb_g){   /* 第二轮 init：EAX 丢失 → 恢复 EAX=cb */
+        u->uc_mcontext.gregs[REG_EAX]=(uint32_t)(uintptr_t)cb_g;
+        printf("[host] reinit-recover@5 eax<-cb\n"); fflush(stdout);
+        return;
+    }
     if(eip>=0x400000&&eip<0x472000 && (uint32_t)(uintptr_t)si->si_addr<0x1000 && cb_g && eip!=0x40017b){
         u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;   /* store replay */
         if(++nrec>120){ printf("[host] recover cap\n"); finish(1); }
@@ -144,8 +158,7 @@ int main(int argc,char**argv){
 
     uint32_t*cb=mmap((void*)0x50000,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     /* cb 头 = 通用服务跳板：call [esp] 命中 cb 基址(cb+0x68 未写时数值=cb)→ 跳 host_service_cb */
-    { uint8_t*th=(uint8_t*)cb;   /* ret $4：吞掉 call [esp] 压入的返回地址，回引擎 */
-      th[0]=0xC2; th[1]=0x04; th[2]=0x00; }
+    { extern void host_service_cb(void); cb[0x68/4]=(uint32_t)(uintptr_t)&host_service_cb; }  /* 服务指针槽 */
 
     cb[0x170/4]=(uint32_t)(uintptr_t)&host_service_cb;
 
@@ -167,6 +180,7 @@ int main(int argc,char**argv){
     sigaction(SIGSEGV,&sa,0); sigaction(SIGBUS,&sa,0);
 
     /* 探针：入口 EAX 变体（0=原映像值）*/
+    memcpy(cb_snap,cb,0x4000);
     if(getenv("H_EAX0")) call_engine(0x400004u,0);
     else call_engine(0x400004u,(uint32_t)(uintptr_t)cb);
 
@@ -175,6 +189,8 @@ int main(int argc,char**argv){
 }
 void finish(int fromsignal){
     uint32_t*cb=cb_g;
+    { FILE*df=fopen("host/build/cb_diff.txt","w");
+      if(df){ for(int i=0;i<0x1000;i++) if(cb[i]!=cb_snap[i] && cb[i]) fprintf(df,"+%04x=%08x\n",i*4,cb[i]); fclose(df); } }
     printf("[host] cb+0x34=%08x +0x38=%08x +0x3c=%08x +0x40=%08x allocs=%d\n",
            cb[0x34/4],cb[0x38/4],cb[0x3c/4],cb[0x40/4],nalloc);
     printf("[host] BIOS: +0x44=%08x +0x48=%08x +0x4c=%08x +0x50=%08x +0x54=%08x +0x58=%08x +0x5c=%08x | +0x30=%08x +0x60=%08x\n",
