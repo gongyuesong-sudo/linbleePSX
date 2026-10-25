@@ -20,7 +20,7 @@ static int one_stream(const uint8_t*img,uint32_t sb,const char*goldpath){
     printf("stream %#x PASS: %ld bytes bit-exact\n",sb,n); return 0;
 }
 int main(void){
-    FILE *{const char*exep=getenv("BLEEM_EXE"); f=fopen(exep?exep:"demo-v1_4.EXE","rb");}
+    const char*exep=getenv("BLEEM_EXE"); FILE *f=fopen(exep?exep:"demo-v1_4.EXE","rb");
     if(!f){perror("exe");return 2;}
     fseek(f,0,SEEK_END); long fs=ftell(f); rewind(f);
     uint8_t *img=malloc(fs); if(fread(img,1,fs,f)!=fs) return 2; fclose(f);
