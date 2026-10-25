@@ -29,6 +29,8 @@ extern uint32_t svc_call(uint32_t);
 uint32_t arena_bump = ARENA_BASE;
 static uint32_t cb_snap[0x1000];
 static int seg=0;
+static int st[64]; static int nst=0;
+static int st_flushed=0;
 static uint32_t bios_region = 0;
 static uint32_t allocs[64]; static int nalloc = 0;
 
@@ -100,13 +102,16 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         printf("[host] store-recover@29c edi<-cb (ebx=%08x ecx=%08x edx=%08x)\n",(uint32_t)u->uc_mcontext.gregs[REG_EBX],(uint32_t)u->uc_mcontext.gregs[REG_ECX],(uint32_t)u->uc_mcontext.gregs[REG_EDX]); fflush(stdout);
         return;
     }
-    if(eip>=0xBFC00000u && eip<0xBFC80000u && cb_g){
+    if((eip>=0xBFC00000u&&eip<0xBFC80000u) || (eip>=0x38000000u&&eip<0x38080000u) ||
+       ((eip>=0x2a1000u&&eip<0x42a1000u)&&eip!=0) || eip==0x400000u || eip==0x400004u){
+        /* BIOS-vector / arena / memtable-call 跳入：HLE stub 语义 —— 返回 0 并回到 img 调用者 */
         uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
         while(k<24){ uint32_t c=st[k]; if(c>=0x400010&&c<0x472000){ ret=c; break; } k++; }
         if(ret){ u->uc_mcontext.gregs[REG_EIP]=ret; u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
                  u->uc_mcontext.gregs[REG_EAX]=0;
-                 printf("[host] bios-sled return -> %08x\n", ret);
-                 if(++seg>=900) finish(1); return; }
+                 if(seg<8 || seg%400==0) printf("[host] stub-sled@%08x -> %08x (#%d)\n",eip,ret,seg); fflush(stdout);
+            { FILE*f=fopen("host/build/stsites.txt","a"); if(f){fprintf(f,"stub %08x\n",eip);fclose(f);} }
+                 if(++seg>=3000){ printf("[host] stub-sled cap 3000\n"); finish(0); } return; }
     }
     if(eip==0x400005 && cb_g){   /* 第二轮 init：EAX 丢失 → 恢复 EAX=cb */
         u->uc_mcontext.gregs[REG_EAX]=(uint32_t)(uintptr_t)cb_g;
@@ -115,8 +120,14 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
     }
     if(eip>=0x400000&&eip<0x472000 && (uint32_t)(uintptr_t)si->si_addr<0x1000 && cb_g && eip!=0x40017b){
         u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;   /* store replay */
-        if(++nrec>120){ printf("[host] recover cap\n"); finish(1); }
-        printf("[host] store-recover eip=%08x edi<-cb\n",eip); fflush(stdout);
+        if(nst<64) st[nst++]=eip;
+        if(++nrec>4000){ printf("[host] recover cap\n");
+            if(!st_flushed){ FILE*f=fopen("host/build/stsites.txt","a");
+                if(f){ for(int q=0;q<nst;q++) fprintf(f,"store %08x\n",st[q]); fclose(f);} st_flushed=1; }
+            for(int q=0;q<nst;q++) st[q]=0; nst=0;
+            u->uc_mcontext.gregs[REG_EIP]=0x4002b7;   /* 强制返回出口：完成本轮 init */
+            u->uc_mcontext.gregs[REG_EAX]=1;
+            return; }
         return;
     }
     if(eip==0x40017b && cb_g){

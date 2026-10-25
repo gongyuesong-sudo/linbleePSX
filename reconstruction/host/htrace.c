@@ -21,6 +21,7 @@ uint32_t bios_map_cb_c(void){
     return 0xBFC00000u;
 }
 uint32_t arena_bump=0x2a1000;
+static int bios_hits=0;
 static uint32_t allocs[64];static uint32_t alloc_sz[64];static int nalloc;
 static uint8_t pre_copy[0x40000];
 static jmp_buf die_env;
@@ -146,6 +147,19 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
             if(recovered<=160) fprintf(logf,"RECOVER-SVC #%d in=%08x out=%08x ret=%08x\n",recovered,eax_in,r0,ret);
             fflush(logf);
             if(recovered>160){ fprintf(logf,"cap\n"); fflush(logf); _exit(4); }
+            u->uc_mcontext.gregs[REG_EFL]|=0x100;
+            return;
+        }
+    }
+    if((eip==0xBFC00000u||(eip>=0x38000000u&&eip<0x38080000u)) && cb_g){
+        uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
+        while(k<24){ uint32_t c=st[k]; if(c>=0x400010&&c<0x472000){ ret=c; break; } k++; }
+        if(ret){
+            u->uc_mcontext.gregs[REG_EIP]=ret; u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
+            u->uc_mcontext.gregs[REG_EAX]=0;
+            bios_hits++;
+            fprintf(logf,"BIOS-SLED #%d from %08x -> %08x\n",bios_hits,eip,ret); fflush(logf);
+            if(bios_hits>40){ fprintf(logf,"VERDICT: engine BIOS-CALL LOOP — PSX exec requires JIT/interpreter at BIOS vector\n"); dump_blocks(); fflush(logf); fclose(logf); _exit(0); }
             u->uc_mcontext.gregs[REG_EFL]|=0x100;
             return;
         }
