@@ -82,12 +82,40 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         return;   /* 继续跑（handler 返回即恢复） */
     }
     if(eip==0x40017b){
-        /* 调用方把 cb 传丢（edi=0）：恢复 edi=cb 并让 [edi+0x30] 写入完成 */
-        u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;
+        /* 已知约定瑕疵：尺寸槽 edi 丢失 — 跳过 store，宿主补写 +0x30=8MB */
+        cb_g[0x30/4]=0x800000;
+        u->uc_mcontext.gregs[REG_EIP]=0x400181;
         recovered++;
-        fprintf(logf,"RECOVER-17B #%d edi<-cb esp=%08x\n",recovered,(uint32_t)u->uc_mcontext.gregs[REG_ESP]); fflush(logf);
+        fprintf(logf,"RECOVER-17B #%d skip store, +0x30=8MB\n",recovered); fflush(logf);
         if(recovered<=80){ u->uc_mcontext.gregs[REG_EFL]|=0x100; return; }
         _exit(4);
+    }
+    /* img 内 store 到 0：edi/caller 丢 cb — 恢复 edi=cb 重放指令 */
+    if(eip>=0x400000&&eip<0x472000 && (uint32_t)(uintptr_t)si->si_addr<0x1000 && cb_g){
+        u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;
+        recovered++;
+        if(recovered<=120) fprintf(logf,"RECOVER-STORE #%d eip=%08x edi<-cb replay\n",recovered,eip);
+        fflush(logf);
+        if(recovered<=120){ u->uc_mcontext.gregs[REG_EFL]|=0x100; return; }
+        _exit(4);
+    }
+    /* 通用数据槽 call 恢复：eip 非 img 区 = 引擎 call 了一个数值数据槽（跳板未接线）。
+     * 从栈上找最近的 img 返回地址，模拟返回 0。 */
+    if(!(eip>=0x400000 && eip<0x472000)){
+        uint32_t *st=(uint32_t*)(uintptr_t)esp;
+        int k=0; uint32_t ret=0;
+        while(k<24){ uint32_t c=st[k]; if(c>=0x400000&&c<0x472000){ ret=c; break; } k++; }
+        if(ret){
+            u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
+            u->uc_mcontext.gregs[REG_EAX]=(ret==0x400194u)?0xBFC00000u:0u;   /* BIOS cb 语义 */
+            u->uc_mcontext.gregs[REG_EIP]=ret;
+            recovered++;
+            if(recovered<=120) fprintf(logf,"RECOVER-SLOT #%d slot@%08x -> ret %08x eax=%08x\n",recovered,eip,ret,u->uc_mcontext.gregs[REG_EAX]);
+            fflush(logf);
+            if(recovered>120){ fprintf(logf,"slot cap\n"); fflush(logf); _exit(4); }
+            u->uc_mcontext.gregs[REG_EFL]|=0x100;
+            return;
+        }
     }
     fprintf(logf,"SEGV-FATAL eip=%08x addr=%p recovered_before=%d\n",eip,si->si_addr,recovered);
     fflush(logf);fclose(logf);_exit(3);

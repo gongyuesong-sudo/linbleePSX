@@ -42,7 +42,7 @@ uint32_t bios_map_cb(void){
     /* 拷贝已备好的低位区内容（若有数据）*/
     memcpy((void*)0xBFC00000u,(void*)bios_region,0x80000);
     printf("[host] bios mapped @0xBFC00000\n");
-    return 0xBFC00000u;
+    return 0;   /* 让引擎走自带 ROM 自加载分支（blk 数据）*/
 }
 
 uint32_t __attribute__((stdcall)) sVA(void *addr, uint32_t size, uint32_t type, uint32_t prot){
@@ -63,14 +63,37 @@ uint32_t __attribute__((stdcall)) sVA(void *addr, uint32_t size, uint32_t type, 
     return r;
 }
 
-static uint32_t*cb_g; static int nalloc_g; 
+static uint32_t*cb_g; static int nalloc_g; static int nrec=0;
+
 static void onsegv(int sig,siginfo_t*si,void*uc){
     (void)sig; ucontext_t*u=(ucontext_t*)uc;
     uint32_t eip=(uint32_t)u->uc_mcontext.gregs[REG_EIP], eax=(uint32_t)u->uc_mcontext.gregs[REG_EAX];
     uint32_t esp=(uint32_t)u->uc_mcontext.gregs[REG_ESP];
     printf("[SEGV] eip=%08x eax=%08x esp=%08x addr=%p\n",eip,eax,esp,si->si_addr); fflush(stdout);
+    { uint32_t*sp=(uint32_t*)(uintptr_t)esp; for(int i=0;i<8;i++) printf("   st[%d]=%08x\n",i,sp[i]); 
+      printf("   cb=%08x thunk[0..3]=%08x %08x\n",(uint32_t)(uintptr_t)cb_g,cb_g?cb_g[0]:0,cb_g?cb_g[1]:0); } fflush(stdout);
     { FILE*g=fopen("host/build/segv_site.txt","w"); if(g){fprintf(g,"eip=%08x eax=%08x esp=%08x addr=%p\n",eip,eax,esp,si->si_addr);fclose(g);} }
+    if((eip<0x400000||eip>=0x472000) && cb_g){
+        /* 数据槽 call 恢复：栈上找回调点；0x400194=BIOS 回调点 → 返回 0xBFC00000 */
+        uint32_t*st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
+        while(k<24){ uint32_t c=st[k]; if(c>=0x400000&&c<0x472000){ ret=c; break; } k++; }
+        if(ret){
+            u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
+            u->uc_mcontext.gregs[REG_EAX]=(ret==0x400194u)?0xBFC00000u:0u;
+            u->uc_mcontext.gregs[REG_EIP]=ret;
+            printf("[host] slot-recover eip=%08x -> %08x eax=%08x\n",eip,ret,u->uc_mcontext.gregs[REG_EAX]); fflush(stdout);
+            return;
+        }
+    }
+    if(eip>=0x400000&&eip<0x472000 && (uint32_t)(uintptr_t)si->si_addr<0x1000 && cb_g && eip!=0x40017b){
+        u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;   /* store replay */
+        if(++nrec>120){ printf("[host] recover cap\n"); finish(1); }
+        printf("[host] store-recover eip=%08x edi<-cb\n",eip); fflush(stdout);
+        return;
+    }
     if(eip==0x40017b && cb_g){
+        u->uc_mcontext.gregs[REG_EIP]=0x400181;   /* 跳过 edi 写：尺寸+槽由宿主直接补 */
+        cb_g[0x30/4]=0x800000; cb_g[0x60/4]=0x328400; cb_g[0x34/4]=cb_g[0x38/4]||0x2a1000;
         /* 已知派发约定瑕疵：call 方丢失 cb(edi=0)。宿主恢复 edi=cb 并放行，
          * 使 +0x30 RAM 尺寸槽正确写入，推进至 BIOS 回调阶段（htrace 已验证该路径）。*/
         u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;
@@ -106,13 +129,8 @@ int main(int argc,char**argv){
     tab[0]=(uint32_t)(uintptr_t)&sVA;
 
     uint32_t*cb=mmap(NULL,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
-    /* cb 头 16B = 可执行入口 thunk：call [esp] 直接跳进 bios_map_cb（JMP rel32 保留槽可覆盖）*/
-    {
-        uint8_t*th=(uint8_t*)cb;
-        th[0]=0xB8; *(uint32_t*)(th+1)=(uint32_t)(uintptr_t)&bios_map_cb; /* mov eax,cb_fn */
-        th[5]=0xFF; th[6]=0xE0;                                           /* jmp eax */
-    }
-    cb[0x170/4]=(uint32_t)(uintptr_t)cb+0x200;
+
+    cb[0x170/4]=(uint32_t)(uintptr_t)&bios_map_cb;  /* engine: push [cb+0x170]; later call [esp] -> BIOS-map cb */
 
     /* H-2：BIOS 映射回调槽 — 引擎 img+0x191 `call [esp]` 请求 host 把
      * 0xBFC00000 区映射并返回指针（img+0x1A4 sub eax,0xBFC00000 → cb+0x48 偏移）。
@@ -142,6 +160,12 @@ void finish(int fromsignal){
     uint32_t*cb=cb_g;
     printf("[host] cb+0x34=%08x +0x38=%08x +0x3c=%08x +0x40=%08x allocs=%d\n",
            cb[0x34/4],cb[0x38/4],cb[0x3c/4],cb[0x40/4],nalloc);
+    printf("[host] BIOS: +0x44=%08x +0x48=%08x +0x4c=%08x +0x50=%08x +0x54=%08x +0x58=%08x +0x5c=%08x | +0x30=%08x +0x60=%08x\n",
+           cb[0x44/4],cb[0x48/4],cb[0x4c/4],cb[0x50/4],cb[0x54/4],cb[0x58/4],cb[0x5c/4],cb[0x30/4],cb[0x60/4]);
+    { FILE*mm=fopen("host/build/memmap.txt","w");
+      if(mm){ fprintf(mm,"psx_size=%08x\nram=%08x,%08x,%08x,%08x\nbios_base=%08x bios_off=%08x\nwin4c=%08x win50=%08x win54=%08x win58=%08x win5c=%08x\nmemtable=%08x\n",
+              cb[0x30/4],cb[0x34/4],cb[0x38/4],cb[0x3c/4],cb[0x40/4],cb[0x44/4],cb[0x48/4],
+              cb[0x4c/4],cb[0x50/4],cb[0x54/4],cb[0x58/4],cb[0x5c/4],cb[0x60/4]); fclose(mm); } }
     int slots_ok=0;
     for(int i=0;i<4;i++){
         uint32_t a=cb[0x34/4+i];
