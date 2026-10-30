@@ -11,13 +11,23 @@
 #include <setjmp.h>
 #include <ucontext.h>
 #include <unistd.h>
+#include <errno.h>
 
 extern void call_engine(uint32_t entry, uint32_t cb);
+#include "biosrom.h"
+static FILE*logf;
 static uint32_t bios_lo=0;
 uint32_t bios_map_cb_c(void){
-    if(!bios_lo){ if(mmap((void*)0x38000000u,0x80000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0)==MAP_FAILED) return 0; bios_lo=0x38000000u; }
-    void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
-    if(m==(void*)0xBFC00000u){ memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000); return 0xBFC00000u; }
+    if(!bios_lo){ if(mmap((void*)0x38000000u,0x80000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0)==MAP_FAILED) return 0; bios_lo=0x38000000u; }
+    void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
+    if(m==(void*)0xBFC00000u){
+        if(g_bios_rom){
+            memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000);   /* 源区=512K，base+0↔窗 */
+            if(logf){ fprintf(logf,"BIOS-LOADED real ROM @0xBFC00000 sha256=%s\n",g_bios_hex); fflush(logf); }
+            return 0xBFC00000u;
+        }
+        memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000); return 0xBFC00000u;
+    }
     return 0xBFC00000u;
 }
 uint32_t arena_bump=0x2a1000;
@@ -32,9 +42,11 @@ static void dump_blocks(void){
     if(!cb_g){ fclose(bf); return; }
     for(unsigned w=0;w<sizeof wins/sizeof*wins;w++){
         uint32_t b=cb_g[wins[w]/4]; if(!b||b==1) continue;
-        if(!((b>=0x2a1000u&&b<0x2e100000u)||(b>=0x00400000u&&b<0x64000000u))) continue;   /* 只读已映射块 */
+        if(!((b>=0x2a1000u&&b<0x042a1000u)||(b>=0x00400000u&&b<0x00fc0000u))) continue;  /* 只读已映射块（arena/img 真实上界）*/
         int nz=0,c3=0; unsigned char*pb=(unsigned char*)b; unsigned lim=0x40000;
         for(int q=0;q<nalloc;q++) if(allocs[q]==b && alloc_sz[q]) lim=alloc_sz[q];
+        { uint32_t maxend = (b>=0x2a1000u)?0x042a1000u:0x00fc0000u;                      /* H-8b：块扫描不得越出映射尾 */
+          if(b+lim>maxend) lim=maxend-b; }
         if(b+lim>0x400000u && b<0x400000u) lim=0x400000u-b;      /* 不越界进 img */
         if(b==0x3e1000u && lim<=0x40000u){
             unsigned char*pc=pre_copy; unsigned wr=0,c3w=0;
@@ -72,7 +84,24 @@ uint32_t __attribute__((stdcall)) sVA(void*a,uint32_t sz,uint32_t t,uint32_t p){
 
 static uint8_t *IMG;
 static volatile int tracing=0, range_lo=0x400004, range_hi=0x400300;
-static FILE*logf;
+static volatile uint32_t last_img_eip=0;   /* H-8b：最后一次 img 内 trap 的 eip（跳转来源指令）*/
+static uint32_t bios_resume(ucontext_t*u,int relaxed){
+    uint32_t eip=(uint32_t)u->uc_mcontext.gregs[REG_EIP];
+    uint32_t esp=(uint32_t)u->uc_mcontext.gregs[REG_ESP];
+    uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
+    uint32_t lo = relaxed?0x400010u:0x400010u;   /* 均 ≥0x400010：img 基址 0x400000/入口 400004 不是合法 BIOS 后续续点 */
+    while(k<24){ uint32_t c=st[k]; if(c>=lo&&c<0x472000){ ret=c; break; } k++; }
+    if(ret){ u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1); }
+    else if(relaxed && last_img_eip && last_img_eip>0x400010u && last_img_eip<0x472000u
+            && IMG[last_img_eip-0x400000u]==0xC3){ ret=last_img_eip+1;   /* ret 尾派发（thunk 弹 BIOS 指针）：BIOS“返回”后续下一条 */
+        if(ret==0x4002b8u && cb_g) st[1]=(uint32_t)(uintptr_t)cb_g; }    /* 后续块 stdcall arg1=控制块（同 RECOVER-29C 约定修正）*/
+    else return 0;
+    u->uc_mcontext.gregs[REG_EIP]=ret;
+    u->uc_mcontext.gregs[REG_EAX]=0;
+    u->uc_mcontext.gregs[REG_EFL]|=0x100;
+    (void)eip; return ret;
+}
+/* logf 已前置声明（H-8a：bios_map_cb_c 需写 BIOS-LOADED） */
 
 static void ontrap(int sig,siginfo_t*si,void*uc){
     (void)sig;ucontext_t*u=(ucontext_t*)uc;
@@ -86,16 +115,40 @@ static void ontrap(int sig,siginfo_t*si,void*uc){
      * clear DR7 entirely and set TF for one instruction — but TF trap = SIGTRAP too,
      * eip = next executed — perfect stepping: */
     
-    if(eip>=0x400000u && eip<0x472000u) u->uc_mcontext.gregs[REG_EFL]|=0x100;
+    if(eip>=0x400000u && eip<0x472000u){
+        last_img_eip=eip;
+        u->uc_mcontext.gregs[REG_EFL]|=0x100;
+        if(eip>0x4002b7u){ static uint32_t seen_deep[4096]; static int ndeep=0; int q=0,news=1;  /* H-8b：深段观测锚 */
+            for(;q<ndeep;q++) if(seen_deep[q]==eip){news=0;break;}
+            if(news){ if(ndeep<4096) seen_deep[ndeep++]=eip; fprintf(logf,"DEEP eip=%08x\n",eip); fflush(logf); } }
+    }
+    else if(g_bios_rom && eip>=0xBFC00000u && eip<0xBFC80000u){
+        uint32_t r=bios_resume(u,1);                       /* H-8b：BIOS 入口早期捕获（MIPS 不滑成 x86）*/
+        if(r){ bios_hits++;
+            fprintf(logf,"BIOS-MIPS-ENTRY #%d from %08x -> %08x\n",bios_hits,eip,r); fflush(logf);
+            static int cap=-1; if(cap<0){ const char*c=getenv("H_SLED_CAP"); cap=c?atoi(c):40; }
+            if(bios_hits>cap){ fprintf(logf,"VERDICT: engine BIOS-CALL LOOP — PSX exec requires JIT/interpreter at BIOS vector\n"); dump_blocks(); fflush(logf); fclose(logf); _exit(0); }
+            return; }
+        fprintf(logf,"LEFT engine range at %08x\n",eip); fflush(logf);
+    }
     else { fprintf(logf,"LEFT engine range at %08x\n",eip); fflush(logf); }
 }
 /* 恢复式 SEGV：占位派发表（mov [ecx],eax 模式被当函数调用）命中时记日志、
  * 令 EAX=0 从调用点返回，模拟 API stub 返回 0，追踪引擎真实推进深度。 */
 static volatile int recovered=0; static uint32_t last_site=0, last_addr=0;
+static volatile int segv_canary=0;
+static volatile int die_armed=1;   /* H-8b：二次 fatal 不得复用已消费 die_env（会 main↔handler 风暴循环）*/
 static void onsegv(int sig,siginfo_t*si,void*uc){
     (void)sig;ucontext_t*u=(ucontext_t*)uc;
     uint32_t eip=(uint32_t)u->uc_mcontext.gregs[REG_EIP];
     uint32_t esp=(uint32_t)u->uc_mcontext.gregs[REG_ESP];
+    if(++segv_canary<=4000){ char b[64]; int n=snprintf(b,sizeof b,"[S%d eip=%08x esp=%08x addr=%p]\n",segv_canary,eip,esp,si->si_addr); if(write(2,b,n)<0){} }
+    /* H-8a 防御：ESP 非映射页（跳飞进 ROM 垃圾码后栈已毁）→ 直接 fatal 上报，不在 handler 内再炸 */
+    if(msync((void*)((esp)&0xfffff000u),4096,MS_SYNC)==EINVAL || msync((void*)((esp+0x60)&0xfffff000u),4096,MS_SYNC)==EINVAL){
+        fprintf(logf,"SEGV-FATAL eip=%08x bad-esp=%08x\n",eip,esp); fflush(logf);
+        if(!die_armed) _exit(5);
+        die_armed=0; siglongjmp(die_env,1);
+    }
     /* 若 eip 在 .data 占位区（0x4022a4-0x402400 等）= 被 call 的占位：
      * 从调用者栈返回：retaddr 在 esp[0] */
     if(eip>=0x4022a4&&eip<0x402500){
@@ -127,8 +180,9 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
             return;
         }
     }
-    if(eip<0x400000 && eip>=0x1000 && cb_g){
-        /* 服务/槽调用恢复（与生产 host 同语义）：找 img 返回地址，真跑 svc 分派 */
+    if(eip<0x400000 && (eip>=0x1000||eip==0) && cb_g){
+        /* 服务/槽调用恢复（与生产 host 同语义）：找 img 返回地址，真跑 svc 分派
+         * H-8b：eip==0 = 未安装服务槽（cb+0x174 等），同走 svc 返回语义 */
         uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
         while(k<24){ uint32_t c=st[k]; if(c>=0x400000&&c<0x472000){ ret=c; break; } k++; }
         if(ret){
@@ -151,16 +205,15 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
             return;
         }
     }
-    if((eip==0xBFC00000u||(eip>=0x38000000u&&eip<0x38080000u)) && cb_g){
-        uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
-        while(k<24){ uint32_t c=st[k]; if(c>=0x400010&&c<0x472000){ ret=c; break; } k++; }
-        if(ret){
-            u->uc_mcontext.gregs[REG_EIP]=ret; u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
-            u->uc_mcontext.gregs[REG_EAX]=0;
+    if(cb_g && ( g_bios_rom ? (eip>=0xBFC00000u&&eip<0xBFC80000u)      /* H-8b：真 ROM 下整窗捕获（x86 滑行落在 +2..+n） */
+                            : (eip==0xBFC00000u||(eip>=0x38000000u&&eip<0x38080000u)) )){
+        uint32_t r=bios_resume(u,g_bios_rom?1:0);
+        if(r){
             bios_hits++;
-            fprintf(logf,"BIOS-SLED #%d from %08x -> %08x\n",bios_hits,eip,ret); fflush(logf);
-            if(bios_hits>40){ fprintf(logf,"VERDICT: engine BIOS-CALL LOOP — PSX exec requires JIT/interpreter at BIOS vector\n"); dump_blocks(); fflush(logf); fclose(logf); _exit(0); }
-            u->uc_mcontext.gregs[REG_EFL]|=0x100;
+            const char *tag = g_bios_rom ? "BIOS-MIPS-ENTRY" : "BIOS-SLED";
+            fprintf(logf,"%s #%d from %08x -> %08x\n",tag,bios_hits,eip,r); fflush(logf);
+            static int cap=-1; if(cap<0){ const char*c=getenv("H_SLED_CAP"); cap=c?atoi(c):40; }
+            if(bios_hits>cap){ fprintf(logf,"VERDICT: engine BIOS-CALL LOOP — PSX exec requires JIT/interpreter at BIOS vector\n"); dump_blocks(); fflush(logf); fclose(logf); _exit(0); }
             return;
         }
     }
@@ -194,8 +247,12 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         if(recovered<=120){ u->uc_mcontext.gregs[REG_EFL]|=0x100; return; }
         _exit(4);
     }
+    /* H-8b：低 VA 补页方案已证伪——img 以流尺寸(0x71cbf)作基址直写 0x71c00，补页后
+     * 引擎滑入宿主码以垃圾指针循环（0804b866 storm）。保持 SEGV-FATAL 干净终点。*/
     fprintf(logf,"SEGV-FATAL eip=%08x addr=%p recovered_before=%d\n",eip,si->si_addr,recovered);
-    fflush(logf); siglongjmp(die_env,1);
+    fflush(logf);
+    if(!die_armed){ fprintf(stderr,"[htrace] secondary fatal — hard exit\n"); _exit(5); }
+    die_armed=0; siglongjmp(die_env,1);
 }
 
 int main(int argc,char**argv){
@@ -214,6 +271,12 @@ int main(int argc,char**argv){
     if(v!=(void*)0x400000)return 3;
     IMG=v; if(fread(IMG,1,sz,f)!=(size_t)sz)return 4; fclose(f);
     ((uint32_t*)(IMG+0x22a4))[0]=(uint32_t)(uintptr_t)&sVA;
+    { int r=bios_rom_load();                       /* H-8a：BLEEM_BIOS 硬校验 */
+      if(r<0){ fprintf(logf,"BLEEM_BIOS wiring fail\n"); fclose(logf); return 6; }
+      if(r>0){ if(mmap((void*)0x38000000u,0x80000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0)==MAP_FAILED){
+                 fprintf(stderr,"BLEEM_BIOS error: bios source region mmap fail\n"); fclose(logf); return 6; }
+               bios_lo=0x38000000u;
+               bios_rom_place(bios_lo, 0); bios_rom_register("host/build/bios_sha256.txt"); } }
     uint32_t*cb=mmap((void*)0x50000,0x4000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     { extern void host_service_cb(void); cb[0x68/4]=(uint32_t)(uintptr_t)&host_service_cb; }   /* 服务指针槽 */
     cb[0x170/4]=(uint32_t)(uintptr_t)cb; cb_g=cb;
@@ -221,7 +284,9 @@ int main(int argc,char**argv){
 
     struct sigaction sa;memset(&sa,0,sizeof sa);sa.sa_sigaction=ontrap;sa.sa_flags=SA_SIGINFO;
     sigaction(SIGTRAP,&sa,0);
-    struct sigaction sv;memset(&sv,0,sizeof sv);sv.sa_sigaction=onsegv;sv.sa_flags=SA_SIGINFO;
+    struct sigaction sv;memset(&sv,0,sizeof sv);sv.sa_sigaction=onsegv;
+    sv.sa_flags=SA_SIGINFO|SA_ONSTACK;        /* H-8b：引擎栈耗尽时处理器仍需可执行（altstack），否则双 SEGV 必死 */
+    { static char as_mem[2<<20]; stack_t ss; ss.ss_sp=as_mem; ss.ss_size=sizeof as_mem; ss.ss_flags=0; sigaltstack(&ss,0); }
     sigaction(SIGSEGV,&sv,0);
 
     /* seed TF via asm: pushf/or/popf — the handler re-arms stepping each trap */
