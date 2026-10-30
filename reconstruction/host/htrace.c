@@ -202,6 +202,8 @@ int main(int argc,char**argv){
     setvbuf(stdout,NULL,_IONBF,0);
     logf=fopen("host/build/htrace.log","w"); if(!logf) logf=fopen("htrace.log","w");
     if(argc>2) range_lo=strtoul(argv[2],0,0);
+    if(argc>3) range_hi=strtoul(argv[3],0,0);
+    fprintf(logf,"RANGE %08x..%08x\n",range_lo,range_hi);
     const char*imgp=argc>1?argv[1]:"decrypted/stream_10a4c_L71cbf_relocated.bin";
     FILE*f=fopen(imgp,"rb");if(!f)return 1;
     fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);
