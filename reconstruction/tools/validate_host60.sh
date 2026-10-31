@@ -25,6 +25,6 @@ PYEOF
 echo "$q" | grep -q "tcb0=880085d8" && note "C) TCB 运行期回写(suspend 覆写注入槽)" || { note "C) FAIL q=$q"; fail=1; }
 FWDLIST=/tmp/h59_all.txt timeout 300 ./host/build/fwd_test 2>&1 | grep -q "FWDSUM ok=2 ctx=22 miss=0" && note "D) 全序基线恒定" || { note "D) FAIL"; fail=1; }
 grep -q "事件驱动运行期实现" docs/56_livethread_resistance.md && grep -q "实施顺序建议 2→1→3" docs/56_livethread_resistance.md && note "E) docs/56 锚齐" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "56_livethread_resistance" README.md && [ "$d" -eq 57 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "56_livethread_resistance" README.md && [ "$d" -eq 58 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST60 CHECK PASS" || echo "HOST60 CHECK FAIL"
 [ $fail -eq 0 ]

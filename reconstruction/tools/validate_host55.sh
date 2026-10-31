@@ -46,7 +46,7 @@ print(f"HOST55: A) 分型一致 {dict(buck)} ok=26; B) ctx 孤跑转化集 {{b0/
 PYEOF
 grep -q "批次态依赖" docs/51_batch2_ctx.md && grep -q "RAM\[0x100+4c\]" docs/51_batch2_ctx.md && grep -q "ok=2 ctx=22 四环境恒定" docs/51_batch2_ctx.md \
   && note "C) docs/51 锚齐" || { note "C) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); grep -q "51_batch2_ctx" README.md && [ "$d" -eq 57 ] \
+d=$(ls docs/*.md | wc -l); grep -q "51_batch2_ctx" README.md && [ "$d" -eq 58 ] \
   && note "D) README 与 docs=$d 一致" || { note "D) FAIL docs=$d"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST55 CHECK PASS" || echo "HOST55 CHECK FAIL"
 [ $fail -eq 0 ]

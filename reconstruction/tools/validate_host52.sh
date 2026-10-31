@@ -51,7 +51,7 @@ print(f"HOST52: B) docs/48 与复跑逐行一致 {n}/50")
 PYEOF
 grep -q "BFC4C1B0 哨兵" docs/48_probe_semantics.md && grep -q "27 个 handler 真执行" docs/48_probe_semantics.md && grep -q "纯转发生成器" docs/48_probe_semantics.md \
   && note "C) docs/48 锚齐" || { note "C) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); grep -q "48_probe_semantics" README.md && [ "$d" -eq 57 ] \
+d=$(ls docs/*.md | wc -l); grep -q "48_probe_semantics" README.md && [ "$d" -eq 58 ] \
   && note "D) README 索引与 docs=$d 一致" || { note "D) FAIL docs=$d"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST52 CHECK PASS" || echo "HOST52 CHECK FAIL"
 [ $fail -eq 0 ]
