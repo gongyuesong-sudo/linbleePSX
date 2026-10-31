@@ -19,7 +19,7 @@ c=0; for pat in "0x328400" "0x9400" "0xBFC00000" "0x1F800000" "0x400" "MAP_32BIT
 export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
 if timeout 240 bash tools/final_check.sh 2>&1 | grep -q "FINAL CHECK PASS"; then note "D) port final_check 回归 PASS(显示/解包面未破)"; else note "D) FAIL"; fail=1; fi
 cd /home/gill/bleem/rewrite
-dd=$(ls docs/*.md | wc -l); if grep -q "88_port_thin_engine_w1" README.md && [ "$dd" -eq 89 ]; then note "E) docs=$dd+README 索引"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "88_port_thin_engine_w1" README.md && [ "$dd" -eq 90 ]; then note "E) docs=$dd+README 索引"; else note "E) FAIL docs=$dd"; fail=1; fi
 g=$(sha256sum decrypted/stream_10a4c_L71cbf.bin | cut -c1-8); e=$(sha256sum /home/gill/bleem/demo-v1_4.EXE | cut -c1-8)
 [ "$g" = "98752b98" ] && [ "$e" = "b61ee13e" ] && note "F) s3 金标准+EXE 恒" || { note "F) FAIL $g/$e"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST98 CHECK PASS" || echo "HOST98 CHECK FAIL"

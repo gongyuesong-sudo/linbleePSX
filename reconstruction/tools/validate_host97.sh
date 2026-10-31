@@ -29,7 +29,7 @@ PY
 set -- $c
 # 报告=写作时点快照: 锚快照自洽(总数=三项和) + 与实况偏序(completed>=快照值); 禁实时精确匹配(铁律)
 if grep -qE "10[0-9] 任务全终态|10[0-9] = [0-9]+✓/[0-9]+✗" $D && [ "$2" -ge 92 ]; then note "C) 报告快照自洽+实况 completed=$2 不减(快照不追锚)"; else note "C) FAIL 账目 $c"; fail=1; fi
-dd=$(ls docs/*.md | wc -l); if grep -q "87_grandfinale_report" README.md && [ "$dd" -eq 89 ]; then note "D) docs=$dd + README 索引在"; else note "D) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "87_grandfinale_report" README.md && [ "$dd" -eq 90 ]; then note "D) docs=$dd + README 索引在"; else note "D) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "E) EXE 只读恒" || { note "E) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST97 CHECK PASS" || echo "HOST97 CHECK FAIL"
 [ $fail -eq 0 ]

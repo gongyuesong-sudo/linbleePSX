@@ -58,7 +58,7 @@ PY
 [ "$b" = "14 3b3e110e" ] && note "B) 补丁重放 14 条目 sha 3b3e110e 恒" || { note "B) FAIL $b"; fail=1; }
 grep -q "FreeLibrary16" docs/84_wine_boundary.md && grep -q "ptrace_scope" docs/84_wine_boundary.md && grep -q "native -m32" docs/84_wine_boundary.md && note "C) docs/84 锚齐" || { note "C) 缺锚"; fail=1; }
 grep -q "krnl386" docs/84_wine_boundary.md && grep -q "3b3e110e" docs/84_wine_boundary.md && note "D) docs/84 取证锚(补丁 sha/krnl386)在" || { note "D) 缺"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "84_wine_boundary" README.md && [ "$dd" -eq 89 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "84_wine_boundary" README.md && [ "$dd" -eq 90 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "F) 原 EXE 只读恒" || { note "F) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST92 CHECK PASS" || echo "HOST92 CHECK FAIL"
 [ $fail -eq 0 ]

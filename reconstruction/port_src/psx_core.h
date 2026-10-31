@@ -28,6 +28,7 @@
 #define PSX_RAM_ALLOCSZ    0x328400u /* docs/82 构造器 imm (≈3.2MB)          */
 #define PSX_MMIO_ALLOCSZ   0x9400u   /* 0x9400 池 (七连 0xC00 子窗)          */
 #define PSX_MMIO_SUBWIN    0xC00u
+#define PSX_BIOS_SIZE      0x80000u  /* BIOS 窗 512KB (楔2, 0xBFC00000 原址) */
 
 /* 翻译窗口 id */
 enum { PSX_WIN_RAM = 0, PSX_WIN_ROM = 1, PSX_WIN_MMIO = 2, PSX_WIN_BAD = 3 };
@@ -37,6 +38,9 @@ enum { PSX_WIN_RAM = 0, PSX_WIN_ROM = 1, PSX_WIN_MMIO = 2, PSX_WIN_BAD = 3 };
 typedef struct {
     uint8_t  *ram;                 /* PSX_RAM_ALLOCSZ  */
     uint8_t  *mmio;                /* PSX_MMIO_ALLOCSZ */
+    uint8_t  *bios;                /* 楔2 fixed 模式 BIOS 窗 (楔1 模式=NULL) */
+    int       fixed;               /* 0=楔1 自由分配+delta; 1=楔2 原址直置    */
+    char      bios_sha[65];        /* BLEEM_BIOS 装载后 SHA-256 hex (登记用) */
     uint32_t  sb[PSXSB_SIZE / 4];  /* 状态块 (槽值=原件平移语义) */
     void     *svc[PSX_SVC_SLOTS];  /* docs/81 服务分派表 */
     uint32_t  svc_nlog;            /* 分派调用日志计数 */
@@ -44,6 +48,12 @@ typedef struct {
 } psx_core_t;
 
 int   psx_core_init(psx_core_t *c);
+/* 楔2: MAP_FIXED_NOREPLACE 三窗原址直置(0x80000000/0xBFC00000/0x1F800000);
+ * 冲突=硬失败(EEXIST→-5..-7), 绝不静默换址; 翻译退化为恒等 */
+int   psx_core_init_fixed(psx_core_t *c);
+/* 楔2: getenv(BLEEM_BIOS) 装载 BIOS 至 0xBFC00000 窗并登记 sha256。
+ * 未设=0(HLE 语义); 已设但缺失/尺寸≠512KB/读失败=硬失败(<0), 不降级 */
+int   psx_load_bios(psx_core_t *c);
 void  psx_core_free(psx_core_t *c);
 /* guest 物理地址 → 宿主指针; *win 输出窗口; 越界返回 NULL + PSX_WIN_BAD */
 void *psx_translate(const psx_core_t *c, uint32_t gpa, uint32_t *win);

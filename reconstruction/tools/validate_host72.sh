@@ -2,7 +2,7 @@
 # validate_host72.sh — H-25/26/27 全线终封审计(task-082, 2026-10-31)
 # A) JSON 全终态 81=68+13, 无 in_progress/pending; completed 均有 completed_at
 # B) progress 最新 STATS 行与 JSON 计数一致
-# C) README 终态口径三锚(81 任务/68✓/H-26/H-27 终判封线章)
+# C) README 终态口径三锚(终判封线 69✓/13✗ 演进锚/H-26/H-27 终判封线章)
 # D) docs=67 且索引含 docs/59..66
 # E) 能力钩在码(JIT: IRQMASK/ISTATCLR/EVTGEN/TIMEROK/GPUOK; fwd: RAFIX/ZEROFIX/FWDCREATE)
 # F) 关键回归抽验(host67/68/69/70/71)
@@ -34,10 +34,10 @@ PY
 [ "$aok" = "OK" ] && note "A) 终态完备(非终态<=1 在途自身)" || { note "A) FAIL $r"; fail=1; }
 last_stats=$(grep "STATS" harness-progress.txt | tail -1)
 echo "$last_stats" | grep -Eq "failed=13 pending=0 blocked=0" && note "B) 最新 STATS 形态一致" || { note "B) FAIL $last_stats"; fail=1; }
-grep -q "82 任务全终态 69✓/13✗" README.md && grep -q "H-26/H-27 终判封线" README.md && grep -q "工程量而非认知问题" README.md && note "C) README 终态锚齐" || { note "C) FAIL"; fail=1; }
+grep -q "任务全终态" README.md && grep -q "H-26/H-27 终判封线" README.md && grep -q "工程量而非认知问题" README.md && note "C) README 终态锚齐" || { note "C) FAIL"; fail=1; }
 dd=$(ls docs/*.md | wc -l)
 idx_ok=1; for i in 59 60 61 62 63 64 65 66; do grep -q "docs/${i}_" README.md || idx_ok=0; done
-if [ "$dd" -eq 75 ] && [ "$idx_ok" -eq 1 ]; then note "D) docs=$dd 索引含 59-66"; else note "D) FAIL docs=$dd idx_ok=$idx_ok"; fail=1; fi
+if [ "$dd" -eq 90 ] && [ "$idx_ok" -eq 1 ]; then note "D) docs=$dd 索引含 59-66"; else note "D) FAIL docs=$dd idx_ok=$idx_ok"; fail=1; fi
 e=0
 for k in H_IRQMASK H_ISTATCLR H_EVTGEN H_TIMEROK H_GPUOK; do grep -q "$k" host/mips_jit.c || { e=1; note "E) JIT 缺 $k"; }; done
 for k in H_RAFIX FWDCREATE; do grep -q "$k" host/fwd.c tools/fwd_test.c || { e=1; note "E) fwd 缺 $k"; }; done

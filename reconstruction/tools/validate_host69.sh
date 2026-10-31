@@ -21,6 +21,6 @@ c=$(env $H5 FWDLIST=/tmp/h69_3d.txt timeout 300 ./host/build/fwd_test 4000000 2>
 echo "$c" | grep -q "blocks=207248 haltpc=000026d0" && note "C1) 五段基线逐字恒" || { note "C1) FAIL $c"; fail=1; }
 FWDLIST=/tmp/h59_all.txt timeout 300 ./host/build/fwd_test 2>&1 | grep -q "FWDSUM ok=2 ctx=22" && note "C2) 全序基线恒" || { note "C2) FAIL"; fail=1; }
 grep -q "H_I044SM" docs/64_wedge3_falsified.md && grep -q "负增益" docs/64_wedge3_falsified.md && grep -q "资产损失" docs/64_wedge3_falsified.md && note "D) docs/64 锚齐" || { note "D) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "64_wedge3_falsified" README.md && [ "$d" -eq 67 ]; then note "E) README 与 docs=$d 一致"; else note "E) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "64_wedge3_falsified" README.md && [ "$d" -eq 90 ]; then note "E) README 与 docs=$d 一致"; else note "E) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST69 CHECK PASS" || echo "HOST69 CHECK FAIL"
 [ $fail -eq 0 ]

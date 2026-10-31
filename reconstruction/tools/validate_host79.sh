@@ -19,6 +19,6 @@ echo "$b" | grep -q "MAINRUN rc=20002 kind=0 v0=800ea868 endpc=8003d6fc" && grep
 c=$(timeout 200 env H_CPUGOLD=$G H_POKE=83c58:0 FWDMAIN=20000000 FWDRCLOG=/tmp/h79_2.rclog ./host/build/fwd_test 2>/dev/null)
 echo "$c" | grep -q "MAINRUN rc=393 kind=2 v0=00000000 endpc=04500e82" && grep -q "EMITFAIL pc=04500eca op=0ee40010 ra=044f4c02 sp=801fff00" /tmp/h79_2.rclog && note "C) 过首墙+第二墙+golden 语境锚" || { note "C) FAIL $c"; fail=1; }
 grep -q "H_CPUGOLD" docs/72_cpugold_firstwall.md && grep -q "0x8008_3C58" docs/72_cpugold_firstwall.md && grep -q "假起点产物" docs/72_cpugold_firstwall.md && note "D) docs/72 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "72_cpugold_firstwall" README.md && [ "$dd" -eq 75 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "72_cpugold_firstwall" README.md && [ "$dd" -eq 90 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST79 CHECK PASS" || echo "HOST79 CHECK FAIL"
 [ $fail -eq 0 ]

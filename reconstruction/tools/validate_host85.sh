@@ -16,7 +16,7 @@ b=$(objdump -D -b binary -m i386 --adjust-vma=0x55338 /tmp/h85_host.bin 2>/dev/n
 echo "$b" | grep -q "mov    \$0x5,%ecx" && echo "$b" | grep -q "sub    \$0x4010c4,%eax" && echo "$b" | grep -q "call   0x55586" && note "B) 二段引导器验真锚" || { note "B) FAIL"; fail=1; }
 grep -qa "bleem!" $E && note "C) 署名串在(0x1002 域=7 项 RVA 指针表, 非纯文本)" || { note "C) FAIL"; fail=1; }
 grep -q "call 映射基址+0x55338\|0x55338" docs/77_two_stage_stub.md && grep -q "二段引导器" docs/77_two_stage_stub.md && grep -q "objdump" docs/77_two_stage_stub.md && note "D) docs/77 锚齐" || { note "D) 缺锚"; fail=1; }
-dd2=$(ls docs/*.md | wc -l); if grep -q "77_two_stage_stub" README.md && [ "$dd2" -eq 84 ]; then note "E) README 与 docs=$dd2 一致"; else note "E) FAIL docs=$dd2"; fail=1; fi
+dd2=$(ls docs/*.md | wc -l); if grep -q "77_two_stage_stub" README.md && [ "$dd2" -eq 90 ]; then note "E) README 与 docs=$dd2 一致"; else note "E) FAIL docs=$dd2"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "F) EXE 只读恒" || { note "F) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST85 CHECK PASS" || echo "HOST85 CHECK FAIL"
 [ $fail -eq 0 ]

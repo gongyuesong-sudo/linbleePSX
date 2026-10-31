@@ -16,7 +16,7 @@ fi
 b=$(sha256sum decrypted/stream_0facc_Lba3.bin decrypted/stream_1015c_L10e7.bin decrypted/stream_10a4c_L71cbf.bin 2>/dev/null | cut -c1-8 | tr '\n' ' ')
 [ -n "$b" ] && note "B) 三流金标准 sha 前缀在账: $b" || { note "B) FAIL"; fail=1; }
 grep -q "位级复现金标准\|终验闭环" docs/85_native_reverify.md && grep -q "boot32 回归坑" docs/85_native_reverify.md && grep -q "具备收官条件" docs/85_native_reverify.md && note "C) docs/85 锚齐(含收官条件判定)" || { note "C) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "85_native_reverify" README.md && [ "$dd" -eq 89 ]; then note "D) README 与 docs=$dd 一致"; else note "D) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "85_native_reverify" README.md && [ "$dd" -eq 90 ]; then note "D) README 与 docs=$dd 一致"; else note "D) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "E) 原 EXE 只读恒" || { note "E) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST93 CHECK PASS" || echo "HOST93 CHECK FAIL"
 [ $fail -eq 0 ]

@@ -19,6 +19,6 @@ echo "$b" | grep -q "MAINRUN rc=4 kind=0 v0=00000000 endpc=044f4c02" && grep -q 
 c=$(timeout 300 env H_CPUGOLD=$G H_POKE=83c58:0 FWDMAIN=20000000 FWDRCLOG=/tmp/h80_c.rclog ./host/build/fwd_test 2>/dev/null)
 echo "$c" | grep -q "MAINRUN rc=393 kind=2 v0=00000000 endpc=04500e82" && grep -q "EMITFAIL pc=04500eca op=0ee40010 ra=044f4c02" /tmp/h80_c.rclog && note "C) 无 HOSTRET 假阳性门逐字恒" || { note "C) FAIL $c"; fail=1; }
 grep -q "混合执行模型" docs/73_hostret_segment.md && grep -q "H_HOSTRET" docs/73_hostret_segment.md && grep -q "边界声明" docs/73_hostret_segment.md && note "D) docs/73 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "73_hostret_segment" README.md && [ "$dd" -eq 84 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "73_hostret_segment" README.md && [ "$dd" -eq 90 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST80 CHECK PASS" || echo "HOST80 CHECK FAIL"
 [ $fail -eq 0 ]

@@ -21,6 +21,6 @@ c=$(H_I044OK=1 FWDLIST=/tmp/h67_3d.txt timeout 200 ./host/build/fwd_test 2>&1 | 
 echo "$c" | grep -q "blocks=119220" && note "C) I044 单段不劣化基线" || { note "C) FAIL $c"; fail=1; }
 FWDLIST=/tmp/h59_all.txt timeout 300 ./host/build/fwd_test 2>&1 | grep -q "FWDSUM ok=2 ctx=22 miss=0" && note "D) 假阳性门恒" || { note "D) FAIL"; fail=1; }
 grep -q "交始终假" docs/62_devreal_chain.md && grep -q "0x1F801040-4F" docs/62_devreal_chain.md && grep -q "真实设备实装" docs/62_devreal_chain.md && note "E) docs/62 锚齐" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "62_devreal_chain" README.md && [ "$d" -eq 67 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "62_devreal_chain" README.md && [ "$d" -eq 90 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST67 CHECK PASS" || echo "HOST67 CHECK FAIL"
 [ $fail -eq 0 ]

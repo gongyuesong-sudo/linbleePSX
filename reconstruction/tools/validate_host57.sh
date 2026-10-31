@@ -31,6 +31,6 @@ assert 'ok=2 ctx=22 miss=0' in o, o
 print("HOST57: D) 全序 waiter 终态恒定 ok=2 ctx=22")
 PYEOF
 grep -q "不是\"数据语境洞\"" docs/53_waiter_census.md && grep -q "WAITER 语义" docs/53_waiter_census.md && note "E) docs/53 锚齐" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "53_waiter_census" README.md && [ "$d" -eq 61 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "53_waiter_census" README.md && [ "$d" -eq 90 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST57 CHECK PASS" || echo "HOST57 CHECK FAIL"
 [ $fail -eq 0 ]

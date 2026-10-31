@@ -19,6 +19,6 @@ c=$(H_I044OK=1 H_IRQMASK=0xFFFFFFFF H_ISTATCLR=1 H_EVTGEN=0x1 FWDLIST=/tmp/h68_3
 echo "$c" | grep -q "blocks=4000000 haltpc=80059ed8" && note "C1) 无 TIMEROK 基线活循环逐字恒" || { note "C1) FAIL $c"; fail=1; }
 FWDLIST=/tmp/h59_all.txt timeout 300 ./host/build/fwd_test 2>&1 | grep -q "FWDSUM ok=2 ctx=22" && note "C2) 全序基线恒" || { note "C2) FAIL"; fail=1; }
 grep -q "0x1F801120" docs/63_timer_lifecycle.md && grep -q "同一边界会师" docs/63_timer_lifecycle.md && grep -q "H_TIMEROK" docs/63_timer_lifecycle.md && note "D) docs/63 锚齐" || { note "D) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "63_timer_lifecycle" README.md && [ "$d" -eq 67 ]; then note "E) README 与 docs=$d 一致"; else note "E) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "63_timer_lifecycle" README.md && [ "$d" -eq 90 ]; then note "E) README 与 docs=$d 一致"; else note "E) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST68 CHECK PASS" || echo "HOST68 CHECK FAIL"
 [ $fail -eq 0 ]
