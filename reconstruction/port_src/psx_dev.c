@@ -1,0 +1,186 @@
+/*
+ * psx_dev.c —— 设备寄存器堆 楔4 (task-110, SESSION-121)
+ * 偏移域 = gpa - 0x1F800000。未登记偏移: 读 0 / 写丢弃(记录 last_unknown)。
+ */
+#include "psx_dev.h"
+#include <stdio.h>
+#include <string.h>
+
+void psx_dev_init(psx_dev_t *d)
+{
+    memset(d, 0, sizeof *d);
+    /* 上电初值: I_STAT 全清, Timer 目标 0xFFFF, 握手相 0 */
+    for (int i = 0; i < 4; i++) d->timer_target[i] = 0xFFFFu;
+}
+
+uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
+{
+    (void)size;
+    switch (off) {
+    case 0x1070: { /* I_STAT: 返回现值; EVTGEN=每 64 次读翻转置位 vblank 位 0x8 */
+        uint32_t v = d->i_stat;
+        if (++d->istat_reads % 64u == 0u) d->i_stat |= 0x8u;
+        return v;
+    }
+    case 0x1074: return d->i_mask;
+    case 0x1044: return d->reg1044;
+    case 0x1048: case 0x104C: return 0;
+    case 0x104A: { /* 双相位握手: bit0→bit1 逐读推进 (docs/62 状态机化) */
+        uint32_t ph = d->phase104a & 1u;
+        d->phase104a++;
+        return (1u << ph) | (d->reg1044 & 0x100u ? 0x100u : 0u);
+    }
+    case 0x1100: case 0x1110: case 0x1120: case 0x1130: { /* Timer cnt 读推进 M1 */
+        int t = (off - 0x1100) / 0x10;
+        uint32_t v = d->timer_cnt[t];
+        d->timer_cnt[t] = (v + PSX_TIMER_ADV) & 0xFFFFu;   /* 16 位计数域 */
+        return v;
+    }
+    case 0x1104: case 0x1114: case 0x1124: case 0x1134:
+        return d->timer_ctrl[(off - 0x1104) / 0x10];
+    case 0x1108: case 0x1118: case 0x1128: case 0x1138:
+        return d->timer_target[(off - 0x1108) / 0x10];
+    case 0x1800: { /* GP0 读=pop FIFO */
+        if (d->gp0_n == 0) return 0u;
+        uint32_t v = d->gp0_fifo[d->gp0_rp];
+        d->gp0_rp = (d->gp0_rp + 1) & 3; d->gp0_n--;
+        return v;
+    }
+    case 0x1808: return d->gp0_n ? d->gp0_fifo[d->gp0_rp] : 0u; /* GPUDATA 顶不 pop */
+    case 0x1804: return d->gp1_last;
+    case 0x1810: return 0xB0000000u | (d->gp0_n < 4 ? (1u << 24) : 0u); /* docs/57 GPUOK 真值 */
+    default: return 0;
+    }
+}
+
+void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
+{
+    (void)size;
+    switch (off) {
+    case 0x1070: d->i_stat &= val; break;              /* docs/57 写 AND 清 */
+    case 0x1074: d->i_mask = val; break;
+    case 0x1044: d->reg1044 = val; break;              /* docs/62 RMW 窗(简化直存) */
+    case 0x1104: case 0x1114: case 0x1124: case 0x1134:
+        d->timer_ctrl[(off - 0x1104) / 0x10] = val & 0xFFFFu; break;
+    case 0x1108: case 0x1118: case 0x1128: case 0x1138:
+        d->timer_target[(off - 0x1108) / 0x10] = val; break;
+    case 0x1100: case 0x1110: case 0x1120: case 0x1130:
+        d->timer_cnt[(off - 0x1100) / 0x10] = val & 0xFFFFu; break;
+    case 0x1800:                                        /* GP0 push 深 4 满丢弃 */
+        if (d->gp0_n < 4) { d->gp0_fifo[d->gp0_wp] = val;
+            d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
+        break;
+    case 0x1804: d->gp1_last = val; break;
+    default: break;
+    }
+}
+
+/* ================= --dev-selftest (楔4 验收面) ================= */
+#include "psx_core.h"
+#include "psx_cpu.h"
+
+#define DCHK(cond, name)                                                       \
+    do { int _ok = (cond) ? 1 : 0;                                             \
+         printf("DEV_TEST %s: %s\n", name, _ok ? "PASS" : "FAIL");             \
+         if (!_ok) bad++; } while (0)
+#define EMIT(a, v) *(volatile uint32_t *)(uintptr_t)(a) = (v)
+static uint32_t I_RT(uint32_t op_, uint32_t rs_, uint32_t rt_, uint32_t im_)
+{ return (op_ << 26) | (rs_ << 21) | (rt_ << 16) | (im_ & 0xFFFF); }
+static uint32_t I_SPEC(uint32_t f_, uint32_t rs_, uint32_t rt_, uint32_t rd_, uint32_t sa_)
+{ return (rs_ << 21) | (rt_ << 16) | (rd_ << 11) | (sa_ << 6) | f_; }
+static uint32_t I_JMP(uint32_t op_, uint32_t target_)
+{ return (op_ << 26) | ((target_ >> 2) & 0x03FFFFFFu); }
+
+int cmd_dev_selftest(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    psx_core_t core; psx_dev_t dev; int bad = 0;
+    if (psx_core_init_fixed(&core) != 0) { printf("DEV_EV fixed init FAIL\n"); return 1; }
+    if (psx_load_bios(&core) != 0) { printf("DEV_EV bios load FAIL\n"); return 1; }
+    psx_dev_init(&dev);
+    core.dev = &dev;   /* attach: cpu 的 MMIO ld/st 将走 dev 钩 */
+
+    /* 1. I_STAT 写 AND 清 (docs/57) */
+    dev.i_stat = 0xF0F0u;
+    psx_dev_write(&dev, 0x1070, 0xF00Fu, 4);
+    DCHK(dev.i_stat == 0xF000u, "istat_write_and_clear");
+
+    /* 2. EVTGEN 每 64 读翻转置位 (docs/57) */
+    dev.i_stat = 0; dev.istat_reads = 0;
+    for (int i = 0; i < 63; i++) psx_dev_read(&dev, 0x1070, 4);
+    int before = (dev.i_stat & 8) != 0;
+    psx_dev_read(&dev, 0x1070, 4);
+    DCHK(!before && (dev.i_stat & 8u) != 0, "evtgen_64read_vblank");
+
+    /* 3. Timer 读推进 0x400 16 位域 (docs/63 M1) */
+    dev.timer_cnt[2] = 0xFE00u;
+    uint32_t a = psx_dev_read(&dev, 0x1120, 4);
+    uint32_t b = psx_dev_read(&dev, 0x1120, 4);
+    DCHK(a == 0xFE00u && b == 0x0200u, "timer2_advance_wrap16");
+
+    /* 4. C2 握手窗 1044/104A 双相位 (docs/62) */
+    dev.phase104a = 0;
+    uint32_t h0 = psx_dev_read(&dev, 0x104A, 2);
+    uint32_t h1 = psx_dev_read(&dev, 0x104A, 2);
+    uint32_t h2 = psx_dev_read(&dev, 0x104A, 2);
+    DCHK(h0 == 0x1 && h1 == 0x2 && h2 == 0x1, "c2_handshake_two_phase");
+
+    /* 5. GPU GP0 FIFO push/pop + GPUOK (docs/57 真值) */
+    psx_dev_write(&dev, 0x1800, 0xE6000400u, 4);        /* E0(显存写命令) */
+    psx_dev_write(&dev, 0x1800, 0x00001234u, 4);        /* 参数 */
+    psx_dev_write(&dev, 0x1800, 0xFFFFFFFFu, 4);
+    psx_dev_write(&dev, 0x1800, 0xFFFFFFFFu, 4);
+    psx_dev_write(&dev, 0x1800, 0xDEADBEEFu, 4);        /* 第 5 个=满丢弃 */
+    uint32_t g1 = psx_dev_read(&dev, 0x1800, 4);
+    uint32_t st = psx_dev_read(&dev, 0x1810, 4);
+    DCHK(g1 == 0xE6000400u && dev.gp0_n == 3 &&
+         (st & 0xF0000000u) == 0xB0000000u && (st & 0x01000000u),
+         "gpu_gp0_fifo4_gpuok_b0000000");
+
+    /* 6. CPU→dev 联动: guest sw 写 I_MASK, lw 读回 I_STAT 触发 EVTGEN 计数 */
+    psx_cpu_t c; psx_cpu_reset(&c, &core);
+    const uint32_t P = 0x80010000u;
+    EMIT(P + 0, I_RT(0x0F, 0, 3, 0x1F80));              /* lui $3,0x1F80 */
+    EMIT(P + 4, I_RT(0x0D, 0, 2, 0x0301));              /* ori $2,0x301 */
+    EMIT(P + 8, I_RT(0x2B, 3, 2, 0x1074));              /* sw $2,0x1074($3)=I_MASK */
+    EMIT(P + 12, I_RT(0x23, 3, 4, 0x1070));             /* lw $4,0x1070($3)=I_STAT */
+    dev.i_stat = 0x1234; dev.istat_reads = 0;
+    c.pc = P - 4; c.npc = P;
+    psx_cpu_run(&c, 4);
+    DCHK(dev.i_mask == 0x301u && c.gpr[4] == 0x1234u &&
+         dev.istat_reads == 1u && c.cop0[13] == 0,
+         "cpu_mmio_sw_lw_hooked");
+
+    /* 7. rootcall 契约链 (docs/41): 0x600 dispatch → 0x674 表 → handler 摸设备 */
+    EMIT(0x80000600, I_SPEC(0x00, 0, 2, 2, 2));         /* sll $2,$2,2 (v0 索引→字节) */
+    EMIT(0x80000604, I_RT(0x0F, 0, 8, 0x8000));         /* lui $8,0x8000 */
+    EMIT(0x80000608, I_RT(0x0D, 8, 8, 0x0674));         /* ori $8=0x80000674 */
+    EMIT(0x8000060C, I_SPEC(0x21, 8, 2, 8, 0));         /* addu $8,$8,$2 */
+    EMIT(0x80000610, I_RT(0x23, 8, 9, 0));              /* lw $9,0($8) */
+    EMIT(0x80000614, I_SPEC(0x08, 9, 0, 0, 0));         /* jr $9 */
+    EMIT(0x80000618, I_SPEC(0x00, 0, 0, 0, 0));         /* 槽 nop */
+    EMIT(0x80000700, I_RT(0x09, 7, 7, 1));              /* handler: addiu $7+1 */
+    EMIT(0x80000704, I_RT(0x0D, 0, 5, 0x00AA));         /* ori $5=0xAA */
+    EMIT(0x80000708, I_RT(0x0F, 0, 6, 0x1F80));         /* lui $6,0x1F80 */
+    EMIT(0x8000070C, I_RT(0x2B, 6, 5, 0x1074));         /* sw $5→I_MASK(设备摸) */
+    EMIT(0x80000710, I_SPEC(0x08, 31, 0, 0, 0));        /* jr $31 */
+    EMIT(0x80000714, I_SPEC(0x00, 0, 0, 0, 0));         /* 槽 nop */
+    EMIT(0x80000674, 0x80000700u);                      /* 表[0]=handler */
+    psx_cpu_reset(&c, &core);
+    c.gpr[2] = 0; c.gpr[7] = 41; c.gpr[31] = 0x80010000u; /* 假返回锚 */
+    EMIT(P + 0, I_SPEC(0x08, 31, 0, 0, 0));             /* 返回=jr $31 */
+    EMIT(P + 4, I_SPEC(0x00, 0, 0, 0, 0));              /* 槽 nop */
+    c.pc = 0x800005FC; c.npc = 0x80000600;              /* 入 rootcall 块 */
+    psx_cpu_run(&c, 13);  /* 5 dispatch + jr+槽 + 5 handler + 返回槽 */
+    DCHK(c.gpr[7] == 42u && dev.i_mask == 0xAAu &&
+         c.gpr[5] == 0xAAu && c.npc == P, "rootcall_600_674_contract_chain");
+
+    /* 8. MMIO 越窗仍 BAD (0x1F809400+) */
+    uint32_t w;
+    DCHK(psx_translate(&core, 0x1F809400u, &w) == NULL && w == PSX_WIN_BAD,
+         "mmio_window_edge_oob");
+
+    psx_core_free(&core);
+    printf(bad ? "PSX DEV SELFTEST FAIL (bad=%d)\n" : "PSX DEV SELFTEST PASS\n", bad);
+    return bad ? 2 : 0;
+}
