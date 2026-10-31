@@ -47,7 +47,7 @@ print("HOST91: D) call*reg 动态面 %d"%nreg)
 exit(0 if ok else 1)
 PY
 grep -q "静态路线封顶\|静态方法边界" docs/83_static_ceiling.md && grep -q "181" docs/83_static_ceiling.md && grep -q "0x10A4E" docs/83_static_ceiling.md && note "E) docs/83 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "83_static_ceiling" README.md && [ "$dd" -eq 85 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "83_static_ceiling" README.md && [ "$dd" -eq 86 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "G) EXE 只读恒" || { note "G) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST91 CHECK PASS" || echo "HOST91 CHECK FAIL"
 [ $fail -eq 0 ]
