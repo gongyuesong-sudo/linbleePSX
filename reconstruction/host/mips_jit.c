@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+static const uint32_t c2stub_words[]={0x3c020000u,0x34420001u,0x11200003u,0u,0x03e00008u,0u,0x03e00008u,0u}; /* tools/c2stub_build.py 同步(task-044) */
 #include <unistd.h>
 
 int g_dbg_emit=0;
@@ -379,6 +380,14 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
         if(psx_state.halted) break;
         uint32_t p=psx_state.pc, h=(p>>2)&(CSLOTS-1);
         { static int ch=-1; if(ch<0) ch=!!getenv("H_C2HOME");   /* task-043 homebrew C2 根协议面 min 供给(docs/32) */
+          if(ch && p==0xb0u && psx_ram){ uint32_t ci=psx_state.r[9];        /* 0xB0 根call向量: t1=cmd, 表 RAM[0x100+cmd*4](task-044) */
+            if(ci<=0x47u){ uint32_t *sl=(uint32_t*)(psx_ram+0x100u+ci*4u);
+                if(*sl==0u||*sl>0x200000u){ memcpy(psx_ram+0x95100u,c2stub_words,sizeof c2stub_words); *sl=0x95100u;
+                    if(log){fprintf(log,"C2HOME rootvec [100+%x*4]->0x95100 cmd=%02x\n",ci,ci); fflush(log);} } } }
+          if(ch){ static int cg=-1,gdone=0; if(cg<0) cg=!!getenv("H_C2GOLD");   /* 自研 C2 区切片消费(docs/32 §5, .analysis 不入 git) */
+            if(cg && !gdone && psx_ram){ FILE*fp=fopen("/home/gill/bleem/.analysis/golden/golden_c2_slice_30000_90000.bin","rb");
+                if(fp){ size_t rd=fread(psx_ram+0x30000,1,0x60000,fp); fclose(fp); gdone=1;
+                    if(log){fprintf(log,"C2GOLD slice bytes=%u\n",(unsigned)rd); fflush(log);} } else gdone=1; } }
           if(ch && p==0x600u && psx_ram){ uint32_t s=*(uint32_t*)(psx_ram+0x674u);
             uint32_t idx=psx_state.r[9];            /* 派发块: v0=0x674; t1=cmd 偏移; t0=[v0+t1]; jr t0 */
             uint32_t *slot=(uint32_t*)(psx_ram+((0x674u+idx)&0x1FFFFFu));
@@ -386,15 +395,14 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
             if(log && idx){ fprintf(log,"C2HOME visit [674+%x]=%08x [674+%x*4]=%08x v0=%08x\n",idx,*slot,*slot2,psx_state.r[2]); fflush(log); }
             if(*slot==0u || *slot>0x200000u){
               static const uint32_t hw[]={0x3C028008u,0x34429F00u,0x03E00008u,0x00000000u}; /* lui v0,0x8008; ori v0,0x9F00; jr ra; nop */
-              memcpy(psx_ram+0x40100u,hw,16); *slot=0x40100u; *slot2=0x40100u;
-              *(uint32_t*)(psx_ram+0x89E7Cu)=0x80089F00u;   /* root 控制块指针(ROM handler 约定) */
-              if(log){fprintf(log,"C2HOME install [674+%x]->0x40100 cb=80089F00\n",idx); fflush(log);} } } }
+              memcpy(psx_ram+0x95000u,hw,16); *slot=0x95000u; *slot2=0x95000u;
+              if(!getenv("H_C2GOLD")) *(uint32_t*)(psx_ram+0x89E7Cu)=0x80089F00u;   /* 非 GOLD: 自装 CB 指针 */
+              if(log){fprintf(log,"C2HOME install [674+%x]->0x95000\n",idx); fflush(log);} } } }
         { static int rh=-1, nred=0; if(rh<0) rh=!!getenv("H_ROOTHLE");
           if(rh && (p>>28)==3 && p<0x3C160000u && psx_state.r[2]==0x80000010u && nred<8){
               nred++; p=0xBFC059E0u; psx_state.pc=p; h=(p>>2)&(CSLOTS-1);   /* NewRootCmd → ROM+0x59E0 handler */
               if(log){fprintf(log,"ROOTHLE redirect->%08x (#%d)\n",p,nred); fflush(log);} } }
-        if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
-        else { lastrep=p; rep=0; }
+        { static int lrep=-1; if(lrep<0){ const char*e=getenv("H_LOOPREP"); lrep=e?atoi(e):20000; } if(p==lastrep){ if(++rep>lrep){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } } else { lastrep=p; rep=0; } }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
         if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
                       for(uint32_t q=(nseq>8?nseq-8:0); q<nseq && q<65536;q++) fprintf(f,"  PREV[%u]=%08x\n",q,seq[q]);
@@ -473,6 +481,8 @@ static int jit_rootcall_serve(void){
     if(exn){   /* 真异常语义：CPU 通用异常 → [RAM 0x130] handler（BIOS 自装分发器）*/
         uint32_t h=jh_lw(0xFFFE0130u);
         if(!h) h=jh_lw(0x130);
+        if(!h){ static int chh=-1; if(chh<0) chh=!!getenv("H_C2HOME");
+            if(chh) h=0x1E988u; }   /* C2HOME(task-044): 表被 BIOS 自清后忠实回退 ROM 异常分发器 */
         h&=0x1FFFFFFFu;
         if(h<0x80000u) h+=0xBFC00000u;   /* 金标准: 表内为 BIOS ROM 相对偏移(trap/entry, 如 0x1E988=异常分发器 ROM 直执) */
         if(h && (h<0x200000u || (h&0x1FC00000u)==0x1FC00000u)){
@@ -613,8 +623,7 @@ int jit_lib_bios_call_log(uint32_t entry_pc,uint32_t budget,uint32_t *ret_v0,FIL
     int n=0; uint32_t lastrep=entry_pc, rep=0; static uint32_t hb[65536];
     for(;n<(int)budget;n++){
         uint32_t p=psx_state.pc,h=(p>>2)&(CSLOTS-1); hb[n&(65536-1)]=p; jit_cur_pc=p;
-        if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
-        else { lastrep=p; rep=0; }
+        { static int lrep=-1; if(lrep<0){ const char*e=getenv("H_LOOPREP"); lrep=e?atoi(e):20000; } if(p==lastrep){ if(++rep>lrep){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } } else { lastrep=p; rep=0; } }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
         if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
                       { for(int q=((int)n>8?(int)n-8:0); q<(int)n;q++) fprintf(f,"  PREV[%d]=%08x\n",q,hb[q&(65536-1)]); }
