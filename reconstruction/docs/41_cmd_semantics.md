@@ -1,0 +1,34 @@
+# 41 — H-23b attempt2：调用窗 26 样本全解码与逐 cmd 语义表（task-052，2026-10-31）
+
+## 1 根call 桩双族定样（ROM 反汇编直证）
+- 形态：`addiu t2,zero,0xB0|0xC0; jr t2; addiu t1,cmd`（cmd 在**延迟槽**物化——
+  这就是 SESSION-59 静态 lui/addiu 普查 0 配对的原因：cmd 从不经 lui 0x100 物化）。
+- `0xB0` 族与 `0xC0` 族 = 两条根向量页（RAM `[0xB0]`/`[0xC0]` 入口 → 各按 `[0x674+t1]`
+  内核相对跳表分发，即 pc=0x600 派发块）。
+- 包装器人口（ROM）：0xD880 族(0x3d/0x32/0x36)、0xD9A0 族(0x18/0x8/…)、0xDAE0(cmd=0x0)、
+  0xDB10 族=**0xC0 页**(0x1c/0x7/0x12/0x8/0x1/0xc)、0xDB78 起(0x0/0x1a/0x1d/0x1b/0x15/0x16)、
+  0xDAF4/0xDB00(0xC0 页 0x2/0x3)。
+
+## 2 H_CMDW 机制（本次落地）
+- C2HOME 派发点对每个 `(idx,ra,a0,a1,a2,v0)` 首见即记 `CMDW` 行（ra/参数运行时真值）。
+- C 侧窗读因 psx_rom 基址错位输出零窗——**由 tools 后处理替代**（本次反汇编在会话内完成，
+  attempt3 若续可把窗读改为 `ra-0xBFC00000` 直读 ROM 文件镜像）。
+
+## 3 26 调用窗语义表（解码率 100%）
+| cmd | 调用点（去重） | 语境判读 |
+|---|---|---|
+| **0x00 (NewRootCmd)** | 0x462c/0x46c0/0x4788/0x47a4（经 0xDAE0）| 线程初始化期连发 4 次；a0=bfc0dd60 事件队列址, a1=0x1c0/0xff |
+| 0x07 | 0x6864（init 串）| A(7) close 类 |
+| 0x08 | 0x6914（init 串, a1=0x2000）| A(8) open 类 |
+| 0x01/0x0C | 0x6924/0x692c（init 串）| A(1)/A(12) 流式 |
+| 0x12 | 0x68ac | A(18) printf 类（a2=0x1F801C00=TTY 设备基址实锤）|
+| 0x1C | 0x685c | A(28) 设备串首项 |
+| 0x0B/0x18/0x3D | 1f148/1f4a8（经 0x5AA00）等 | ExecInitMem 阶段 |
+| **idx=0x110 谜团消解** | 1788 次"visit[674+110]" | 是 idx<<2 双读伪影 + 0xC0 页低表复用；非单一热命令 |
+| 0x1C8/0xE4/0xFC/0x6C | ra=C2SEC(0x80030010/2c/0x86c/0x87c)/kernel(0x54230/0x5462c) | C2 自身与 kernel 内根call（a1=bfc7ff91 串引用）|
+
+## 4 H-23b 落地点（attempt3/后继任务直接可写）
+- 自研 handler 需实现的最小集 = `{0x00 NewRootCmd(建 CB 队列节点), 0x08/0x07 open/close, 0x01/0x0C read/write, 0x12 printf(已 TTY), 0x1C}`；
+  NewRootCmd 真语义参照 = 调用者期望返回 CB 指针（a0=事件队列, a1=buf 大小 0x1C0）。
+- C2 侧自调（0x1C8/0xE4/0xFC/0x6C）= **C2main 已在呼叫 C1 服务**——契约是双向的，
+  handler 必须同时服务 C1 调用者与 C2 调用者（ra 位段可区分）。

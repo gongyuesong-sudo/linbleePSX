@@ -464,6 +464,15 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
             uint32_t *slot=(uint32_t*)(psx_ram+((0x674u+idx)&0x1FFFFFu));
             uint32_t *slot2=(uint32_t*)(psx_ram+((0x674u+(idx<<2))&0x1FFFFFu));
             if(log && idx){ fprintf(log,"C2HOME visit [674+%x]=%08x [674+%x*4]=%08x v0=%08x\n",idx,*slot,*slot2,psx_state.r[2]); fflush(log); }
+            if(getenv("H_CMDW") && idx && log){   /* (idx,ra) 调用窗采集(task-052a2) */
+              static uint64_t seen[256]; static int ns=0; uint32_t ra=psx_state.r[31]; uint64_t k=((uint64_t)idx<<32)|ra; int i,f=0;
+              for(i=0;i<ns;i++) if(seen[i]==k){f=1;break;}
+              if(!f && ns<256){ seen[ns++]=k;
+                fprintf(log,"CMDW idx=%x ra=%08x a0=%08x a1=%08x a2=%08x v0=%08x win:",idx,ra,psx_state.r[4],psx_state.r[5],psx_state.r[6],psx_state.r[2]);
+                { uint32_t base=(ra&0x1FFFFFFu)-8; for(i=-3;i<5;i++){ uint32_t a=base+i*4,w=0;
+                    if(a<0x80000u && psx_rom) w=*(uint32_t*)(psx_rom+a); else if(psx_ram && a<0x200000u) w=*(uint32_t*)(psx_ram+a);
+                    fprintf(log," %08x",w);} }
+                fprintf(log,"\n"); fflush(log); } }
             if(*slot==0u || *slot>0x200000u){
               static const uint32_t hw[]={0x3C028008u,0x34429F00u,0x03E00008u,0x00000000u}; /* lui v0,0x8008; ori v0,0x9F00; jr ra; nop */
               memcpy(psx_ram+0x95000u,hw,16); *slot=0x95000u; *slot2=0x95000u;

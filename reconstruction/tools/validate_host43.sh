@@ -41,5 +41,24 @@ if [ "$fail" -eq 0 ]; then
     [ "${N:-0}" -ge 1000 ] && [ "${M:-0}" -ge 3 ] && note "F) census 复算 visit110=$N rootvec=$M" || { note "F) census FAIL N=$N M=$M"; fail=1; }
   fi
 fi
+if [ "$fail" -eq 0 ]; then
+  grep -q "H_CMDW" host/mips_jit.c && [ -f docs/41_cmd_semantics.md ] && grep -q "延迟槽" docs/41_cmd_semantics.md && grep -q "NewRootCmd" docs/41_cmd_semantics.md \
+    && note "G) H_CMDW + docs/41 语义表在" || { note "G) FAIL"; fail=1; }
+  python3 <<'PYEOF2' || { note "H) 桩族字面复算 FAIL"; fail=1; }
+import struct
+rom=open('/home/gill/bleem/psxbios/SCPH1001.BIN','rb').read()
+def W(o): return struct.unpack_from('<I',rom,o)[0]
+assert W(0xDB10)==0x240A00C0 and W(0xDB14)==0x01400008 and W(0xDB18)==0x2409001C, 'stub family'
+assert W(0xD880)==0x240A00B0 and W(0xD888)==0x2409003D, 'B0 family'
+n=0
+for i in range(0x5800,0xE000,4):
+    if W(i)==0x240A00B0 and W(i+4)==0x01400008 and (W(i+8)>>26)==9: n+=1
+assert n>=20, f'census n={n}'
+print(f"HOST43: H) 根call 桩族字面+普查复算 OK(0x5800..0xE000 内 B0 族 n={n})")
+PYEOF2
+  ROM=/home/gill/bleem/psxbios/SCPH1001.BIN
+  env H_CMDW=1 H_C2HOME=1 H_C2GOLD=1 H_C2END=0x89E00 H_DEVRST=1 H_DEVRST2=1 H_LOOPREP=3000000 H_MAXB=8000000 H_ARENA_MB=320 H_SLED_CAP=200 H_BIOSJIT=1 H_BIOSEXN=1 H_JIT_BUDGET=10000000 BLEEM_BIOS=$ROM HTRACE_LOG=/tmp/h43w.log timeout 600 ./host/build/htrace decrypted/stream_10a4c_L71cbf_relocated.bin 0x400000 0x472000 >/dev/null 2>&1
+  NC=$(grep -ac "^CMDW" /tmp/h43w.log || true); [ "${NC:-0}" -ge 20 ] && note "I) CMDW 采集复算 n=$NC" || { note "I) CMDW FAIL n=$NC"; fail=1; }
+fi
 [ "$fail" -eq 0 ] && echo "HOST43 CHECK PASS" || echo "HOST43 CHECK FAIL"
 [ "$fail" -eq 0 ]
