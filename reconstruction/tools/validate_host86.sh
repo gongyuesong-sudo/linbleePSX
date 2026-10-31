@@ -35,7 +35,7 @@ print("HOST86: D) MZ×2 验伪复算", "OK" if not bad else "FAIL")
 exit(bad)
 PY
 grep -q "交权行" docs/78_second_stage_map.md && grep -q "0xfa00" docs/78_second_stage_map.md && grep -q "验伪" docs/78_second_stage_map.md && note "E) docs/78 锚齐" || { note "E) 缺锚"; fail=1; }
-dd2=$(ls docs/*.md | wc -l); if grep -q "78_second_stage_map" README.md && [ "$dd2" -eq 79 ]; then note "F) README 与 docs=$dd2 一致"; else note "F) FAIL docs=$dd2"; fail=1; fi
+dd2=$(ls docs/*.md | wc -l); if grep -q "78_second_stage_map" README.md && [ "$dd2" -eq 80 ]; then note "F) README 与 docs=$dd2 一致"; else note "F) FAIL docs=$dd2"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "G) EXE 只读恒" || { note "G) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST86 CHECK PASS" || echo "HOST86 CHECK FAIL"
 [ $fail -eq 0 ]

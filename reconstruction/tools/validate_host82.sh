@@ -20,6 +20,6 @@ if [ "$p1" = "$p0" ] && [ "$p2" = "$p0" ] && [ "$p3" = "$p0" ]; then note "B) �
 c=$(env H_CPUGOLD=$G H_POKE=83c58:0 H_HOSTRET=1 FWDSEGS=1 FWDMAIN=20000000 FWDRCLOG=/tmp/h82_1.rclog timeout 200 ./host/build/fwd_test 2>/dev/null | grep "SEG 0")
 echo "$c" | grep -q "rc=4 kind=0 v0=00000000 endpc=044f4c02" && note "C) 单段假阳性门恒" || { note "C) FAIL $c"; fail=1; }
 grep -q "分发器在宿主侧\|唤醒协议" docs/75_seginject_falsified.md && grep -q "H_SEGP" docs/75_seginject_falsified.md && grep -q "实测穷尽" docs/75_seginject_falsified.md && note "D) docs/75 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "75_seginject_falsified" README.md && [ "$dd" -eq 79 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "75_seginject_falsified" README.md && [ "$dd" -eq 80 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST82 CHECK PASS" || echo "HOST82 CHECK FAIL"
 [ $fail -eq 0 ]
