@@ -27,7 +27,8 @@ static void enter_exception(psx_cpu_t *c, uint32_t excode, uint32_t badv, int ha
     c->exc_n++;
 }
 
-uint32_t g_watch_lo = 0, g_watch_hi = 0, g_watch_n = 0;
+uint32_t g_watch_lo = 0, g_watch_hi = 0, g_watch_n = 0, g_cm_skip = 0;
+#include <stdlib.h>
 int g_watch_post = 0; uint32_t g_watch_done_gpa = 0xFFFFFFFFu, g_watch_last_pc = 0;
 static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int store)
 {
@@ -35,6 +36,17 @@ static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int stor
     uint32_t w;
     void *p = psx_translate(c->core, gpa, &w);
     if (!p || w == PSX_WIN_BAD) { enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
+    /* 楔5 实验: cache-maintenance 写弃(patch 面, BIOSRUN_CMEXP=1 启用)——
+     * BIOS 清零循环(pc 0xBFC01958-0xBFC01988)以 16B 步距扫 [0,0xF80) =
+     * D-cache 维护特征; 真机该写不改 RAM(或语义不同), 实验=对 RAM 低页写弃 */
+    if (store && getenv("BIOSRUN_CMEXP")) {
+        uint32_t norm = gpa & 0x1FFFFFFFu;
+        if (c->pc >= 0xBFC01940u && c->pc <= 0xBFC01A40u && norm < 0x1000u) {
+            static uint32_t blackhole;
+            *host = &blackhole; g_cm_skip++;   /* 写落黑洞=等效写弃(caller 透明) */
+            return 0;
+        }
+    }
     /* 楔4 侦察: RAM 写侦测窗(BIOSRUN_WATCH=lo,hi 归一化地址) */
     if (store && g_watch_n < 400u) {
         uint32_t norm = gpa & 0x1FFFFFFFu;
@@ -165,11 +177,17 @@ int psx_cpu_step(psx_cpu_t *c)
         default: enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
         }
         break;
-    case 0x01: /* REGIMM: bltz/bgez/bltzal/bgezal */
-        if (rs == 0 || rs == 0x10) took = (int32_t)G(rt) < 0;
-        else if (rs == 1 || rs == 0x11) took = (int32_t)G(rt) >= 0;
+    case 0x01: /* REGIMM(楔5 修): 操作数=rs, 子操作=rt 字段(MIPS 正字) */
+        if (rt == 0 || rt == 16 || rt == 2 || rt == 18) {
+            took = (int32_t)G(rs) < 0;
+            if (rt == 16 || rt == 18) SETG(31, c->npc);            /* bltzal */
+        } else if (rt == 1 || rt == 17 || rt == 3 || rt == 19) {
+            took = (int32_t)G(rs) >= 0;
+            if (rt == 17 || rt == 19) SETG(31, c->npc);            /* bgezal */
+        } else if (rt == 20 || rt == 21) {                          /* PSX reserved */
+            enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
+        }
         else { enter_exception(c, 10u, 0, 0); c->cycles++; return 0; }
-        if (rs == 0x10 || rs == 0x11) SETG(31, c->npc);
         if (took) tgt = c->npc + SIGN16(im) * 4;
         break;
     case 0x02: took = 1; tgt = (c->npc & 0xF0000000u) | ((insn & 0x03FFFFFFu) << 2); break;
@@ -425,6 +443,24 @@ int cmd_cpu_selftest(int argc, char **argv)
     psx_cpu_step(&c);
     CCHK(c.cop0[13] == (10u << 2), "p7_reserved_gte_trap10");
 
+    /* --- P7b REGIMM 标准编码(楔5: BIOS 0x30C8 bltz 现场教训) --- */
+    EMIT(P + 0,  0x2404FFFFu);            /* addiu $4,$0,-1 */
+    EMIT(P + 4,  0x04800002u);            /* bltz $4,+2 (子操作在 rt=0) */
+    EMIT(P + 8,  0x00000000u);            /* nop(延迟槽) */
+    EMIT(P + 12, 0x240700BBu);            /* addiu $7,$0,0xBB (不该到) */
+    EMIT(P + 16, 0x240700AAu);            /* addiu $7,$0,0xAA (bltz 落点) */
+    EMIT(P + 20, 0x04900001u);            /* bltzal $4,+1 (rt=16): 跳 P+28, $31=挂 */
+    EMIT(P + 24, 0x00000000u);            /* slot nop */
+    EMIT(P + 28, 0x00000000u);            /* bltzal 落点 nop */
+    EMIT(P + 32, 0x04A00001u);            /* bgtz? op1 rt=20 reserved 面(另测) */
+    c.pc = P - 4; c.npc = P;
+    psx_cpu_run(&c, 5);                    /* 0..4: addiu,bltz,nop,addiu(落点P16) */
+    CCHK(c.gpr[7] == 0xAAu && c.gpr[4] == 0xFFFFFFFFu, "p7b_bltz_operand_in_rs");
+    psx_cpu_step(&c);                      /* P+20 bltzal */
+    psx_cpu_step(&c);                      /* slot */
+    psx_cpu_step(&c);                      /* 落点 */
+    CCHK(c.gpr[31] != 0 && c.pc >= P + 28, "p7b_bltzal_ra_link");
+
     /* --- P8 真 BIOS 取指 (BLEEM_BIOS 装载态) --- */
     psx_cpu_reset(&c, &core);
     uint32_t insn0 = *(volatile uint32_t *)(uintptr_t)0xBFC00000u;
@@ -512,9 +548,16 @@ int cmd_bios_run(int argc, char **argv)
         { char *tw = getenv("BIOSRUN_TRACE");
           if (tw) { unsigned t0,t1; sscanf(tw, "%u,%u", &t0, &t1);
             if (n >= t0 && n <= t1)
-                printf("TR %u pc=%x insn=%08x a0=%x a2=%x a3=%x ra=%x\n",
-                       n, pc_pre, insn_at, c.gpr[4], c.gpr[6], c.gpr[7], c.gpr[31]); } }
+                printf("TR %u pc=%x insn=%08x a0=%x a2=%x a3=%x ra=%x k0=%x k1=%x t1=%x\n",
+                       n, pc_pre, insn_at, c.gpr[4], c.gpr[6], c.gpr[7], c.gpr[31],
+                       c.gpr[26], c.gpr[27], c.gpr[9]); } }
         psx_cpu_step(&c);
+        { char *tw2 = getenv("BIOSRUN_TRACE");
+          if (tw2) { unsigned t0,t1; sscanf(tw2, "%u,%u", &t0, &t1);
+            if (n >= t0 && n <= t1)
+                printf("TR2 %u npc=%x k0=%x k1=%x at=%x t1=%x pend=%x tgt=%x\n",
+                       n, c.npc, c.gpr[26], c.gpr[27], c.gpr[1], c.gpr[9],
+                       c.branch_pending, c.branch_target); } }
         if (g_watch_done_gpa != 0xFFFFFFFFu) {
             uint32_t w9; void *p9 = psx_translate(&core, g_watch_done_gpa, &w9);
             uint32_t v9 = (p9 && w9 != PSX_WIN_BAD) ? *(volatile uint32_t *)p9 : 0xDEADu;
@@ -578,6 +621,7 @@ int cmd_bios_run(int argc, char **argv)
             exc_seen++;
         }
     }
+    if (getenv("BIOSRUN_CMEXP")) printf("BISO_EV cm_skip=%u\n", g_cm_skip);
     printf("BISO_EV steps=%u cycles=%u exc_total=%u pc=%x npc=%x v0=%x sp=%x ra=%x\n",
            n, c.cycles, c.exc_n, c.pc, c.npc, c.gpr[2], c.gpr[29], c.gpr[31]);
     printf("BISO_EV first cause=%x epc=%x insn=%08x\n", first_cause, first_epc, first_op);
