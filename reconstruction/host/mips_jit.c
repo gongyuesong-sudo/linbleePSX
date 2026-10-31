@@ -354,7 +354,7 @@ static int jit_rootcall_serve(void);
 int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,uint32_t win_base,int backfill){
     if(!psx_ram) jit_init();
     psx_state.pc=entry; psx_state.halted=0; psx_state.halt_kind=0; cache_inval();
-    static uint32_t seq[8192]; uint32_t nseq=0,done=0; uint32_t lastrep=entry, rep=0;
+    static uint32_t seq[65536]; uint32_t nseq=0,done=0; uint32_t lastrep=entry, rep=0;
     jit_rc_log=log;
     if(getenv("H_CDHLE")&&psx_ram){ extern void hlecd_install_pub(void); hlecd_install_pub(); }
     for(;done<max_blocks;done++){
@@ -363,8 +363,10 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
         if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
         else { lastrep=p; rep=0; }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
-        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p); if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
-        if(nseq<8192) seq[nseq++]=p;
+        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
+                      for(uint32_t q=(nseq>8?nseq-8:0); q<nseq && q<65536;q++) fprintf(f,"  PREV[%u]=%08x\n",q,seq[q]);
+                      fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
+        if(nseq<65536) seq[nseq++]=p; else done=1;
         { static int st2=0; if(getenv("JIT_DEBUG")&&st2<400){ uint32_t *u=(uint32_t*)cc[h].code;
             fprintf(stderr,"[T%u pc=%08x code=%p]",st2,p,cc[h].code);
             for(int q=0;q<60;q++) fprintf(stderr," %08x",u[q]); fprintf(stderr,"\n"); fflush(stderr); }
@@ -382,7 +384,7 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
             fprintf(log,"\nDUMP38 slot vpc=%08x code=%p\n",cc[h2].vpc,(void*)cc[h2].code);
             if(cc[h2].code){ fprintf(log,"DUMP38 x86:"); for(int q=0;q<12;q++) fprintf(log," %08x",((uint32_t*)cc[h2].code)[q]); fprintf(log,"\n"); }
             fflush(log); } }
-        if(getenv("H_JITBLOCKS")){ uint32_t st=0; for(uint32_t i=st;i<nseq;i++) fprintf(log,"BLK %08x\n",seq[i&8191]);
+        if(getenv("H_JITBLOCKS")){ uint32_t st=0; for(uint32_t i=st;i<nseq;i++) fprintf(log,"BLK %08x\n",seq[i&(65536-1)]);
             if(psx_ram){ uint32_t base[]={0x0A0100u,0x0A0140u,0x40000u,0x50000u,0x41000u};
                 for(unsigned q2=0;q2<5;q2++) for(uint32_t o=0;o<0x20;o+=4) fprintf(log,"RAMB %06x=%08x\n",base[q2]+o,*(uint32_t*)(psx_ram+base[q2]+o)); }
             fflush(log); }
@@ -575,18 +577,20 @@ int jit_lib_bios_call2(uint32_t entry_pc,uint32_t budget,uint32_t*v0,uint32_t*ki
 int jit_lib_bios_call_log(uint32_t entry_pc,uint32_t budget,uint32_t *ret_v0,FILE*log){
     if(!psx_ram) jit_init();   /* htrace 路径不显式 init: 惰性补齐(否则 RAM fetch 全灭) */
     psx_state.pc=entry_pc; psx_state.halted=0; psx_state.halt_kind=0; jit_rc_log=log;
-    int n=0; uint32_t lastrep=entry_pc, rep=0; static uint32_t hb[8192];
+    int n=0; uint32_t lastrep=entry_pc, rep=0; static uint32_t hb[65536];
     for(;n<(int)budget;n++){
-        uint32_t p=psx_state.pc,h=(p>>2)&(CSLOTS-1); hb[n&8191]=p; jit_cur_pc=p;
+        uint32_t p=psx_state.pc,h=(p>>2)&(CSLOTS-1); hb[n&(65536-1)]=p; jit_cur_pc=p;
         if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
         else { lastrep=p; rep=0; }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
-        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p); if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
+        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
+                      { for(int q=((int)n>8?(int)n-8:0); q<(int)n;q++) fprintf(f,"  PREV[%d]=%08x\n",q,hb[q&(65536-1)]); }
+                      fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
         ((void(*)())cc[h].code)();
         if(psx_state.halted){ if(jit_rootcall_serve()) break; }
     }
     if(getenv("H_JITBLOCKS")&&log&&psx_ram){ for(uint32_t o=0x00;o<0x100;o+=4) fprintf(log,"RAMB %04x=%08x\n",o,*(uint32_t*)(psx_ram+o)); fflush(log); }
-    if(getenv("H_JITBLOCKS")&&log){ uint32_t st=0; for(uint32_t i=st;i<(uint32_t)n;i++) fprintf(log,"BLK %08x\n",hb[i&8191]); fprintf(log,"BLK end=%08x\n",psx_state.pc); fflush(log); }
+    if(getenv("H_JITBLOCKS")&&log){ uint32_t st=0; for(uint32_t i=st;i<(uint32_t)n;i++) fprintf(log,"BLK %08x\n",hb[i&(65536-1)]); fprintf(log,"BLK end=%08x\n",psx_state.pc); fflush(log); }
     if(ret_v0)*ret_v0=psx_state.r[2];
     return n;
 }
@@ -704,7 +708,9 @@ static int bios_smoke(const char*path){
     for(;blocks<500000;blocks++){ hist[blocks&4095]=psx_state.pc; rc=jit_run(1); if(rc) break; }
     if(getenv("JIT_TRACE_BIOS")){ for(uint32_t i=(blocks>60?blocks-60:0); i<blocks; i++) fprintf(stderr,"[HB] %08x\n",hist[i&4095]); }
     printf("JIT-BIOS steps(blocks)=%u rc=%d pc=%08x halted=%u sp=%08x ra=%08x v0=%08x\n",blocks,rc,psx_state.pc,psx_state.halted,psx_state.r[29],psx_state.r[31],psx_state.r[2]);
-    int ok=(rc==2 && psx_state.pc>=0xBFC00000u && blocks>=100u);  /* 引导链推进到首个 syscall 停机 */
+    /* task-041 重锚(新 JIT 语义): 旧基线"ROM 内 syscall 浅停机"系 addu/ra-flag bug 伪像;
+       新基线 = 链过 kernel 自装+清 RAM 循环, 抵达 rootcall NewRootCmd(cmd=0x10, RAM 处理槽未装=冷链边界) */
+    int ok=(rc==2 && blocks>=15000u && psx_state.r[2]==0x80000010u);
     printf("JIT-CHECK: %s\n",ok?"PASS":"FAIL");
     return ok?0:1;
 }

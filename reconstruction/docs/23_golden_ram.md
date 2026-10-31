@@ -36,3 +36,7 @@
 - `bash tools/validate_host23.sh`：金标准文件+哈希在场断言、判异表落档断言、
   `H_GOLDEN` 链块数 > 无金标准 HLEBOOT(206) 且 BLK 含 0x4A4C(真 RAM kernel 码执行证据)。
 - 金标准重生产：本节 1 管线脚本 `tools/golden_ram_pipeline.sh`。
+
+## 勘误(SESSION-44, task-041)
+原文 0x4a4c/0x32e24 锚系 bug 语义链特定路线；新基线链执行 RAM kernel 入口 0x500/轮询环 0x5a8(a0000500 亦证)，
+golden 链 142176 块、与无 golden 链同停 rootcall NewRootCmd 处理槽边界(golden 0x9E7C 槽同为 0)。详见 docs/30。

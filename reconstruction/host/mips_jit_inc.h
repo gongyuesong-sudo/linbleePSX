@@ -20,7 +20,7 @@
 
 int g_dbg_emit=0;
 static FILE *jit_rc_log;
-typedef struct { uint32_t r[32]; uint32_t pc; uint32_t halted; uint32_t halt_kind; } PsxState;  /* halt_kind: 1=syscall/break 2=emit-fail */
+typedef struct { uint32_t r[32]; uint32_t pc; uint32_t halted; uint32_t halt_kind; uint32_t bflag; } PsxState;  /* halt_kind: 1=syscall/break 2=emit-fail; bflag=块内分支 flag(勘误: 原用 ST+124=ra 同址互踩, 后 140 越界) */
 PsxState psx_state;
 #define HK (ST+136u)
 
@@ -47,6 +47,7 @@ static void devlog(const char*rw,uint32_t a,uint32_t v){ FILE*f=devlog_fp(); if(
 /* 最小设备层：0x1F800000-0x1F80FFFF 16-bit 默认开寄存器组（uninit=0xFFFFFFFF；
  * GPU/CDROM status 窗默认 0=ready 已实证无害；写全收，读按寄存器值）*/
 static uint32_t dev_regs[0x10000>>2];
+static uint32_t g_gpuw;   /* GP0(0x1F801810) 命令写计数(H-17) */
 static uint32_t exvbd[0x1000>>2];   /* 0xFFFE0000-0xFFFEFFFF: ExceptionVectorBaseData 硬件寄存器组(RAM 0x130 类写入实为硬件窗) */
 static uint32_t dev_read(uint32_t a){ uint32_t o=a&0xFFFF;
     if(o>=0x1000&&o<=0x10FF) return dev_regs[o>>2];         /* GPU/IRQ 域默认 0 = ready */
@@ -62,6 +63,8 @@ void __attribute__((stdcall)) jh_cop0_write(uint32_t r0,uint32_t v){ r0&=31; cop
 uint32_t __attribute__((stdcall)) jh_lw(uint32_t a){
     uint32_t a0=a;
     a=phys(a);
+    if(a>=0x2A0100u&&a<0x2A0104u&&devlog_fp()){ extern uint32_t jit_cur_pc; fprintf(devlog_fp(),"LW2A0 pc=%08x a=%08x\n",jit_cur_pc,a0); fflush(devlog_fp()); }
+    if(getenv("H_SWTRACE")&&((a>=0x80041000u&&a<0x80041004u)||(a>=0x82000u&&a<0x82004u)||(a>=0x80050000u&&a<0x80050004u))&&devlog_fp()){ static int m; if(m<10){m++; extern uint32_t jit_cur_pc; fprintf(devlog_fp(),"LWT #%d a=%08x pc=%08x\n",m,a,jit_cur_pc); fflush(devlog_fp());} }
     if((a0&0xFFFF0000u)==0xFFFE0000u){ uint32_t r=exvbd[(a0&0xFFF)>>2]; devlog("RD",a0,r); return r; }
     if((a0&0x1FFF0000u)==0x1F800000u){ uint32_t r=dev_read(a0); devlog("RD",a0,r); return r; }
     { uint32_t k=phys(a0); if(k>=0x60u&&k<=0x6Fu&&psx_ram) g_lowrd++; }
@@ -73,8 +76,9 @@ static void watch_store(uint32_t a,uint32_t v){ static int done; static uint32_t
     if(!done){ done=1; { const char*w=getenv("H_WATCH"); if(w){ sscanf(w,"%x:%x",&lo,&hi); } } }
     if(hi&&a>=lo&&a<hi&&(f=devlog_fp())){ fprintf(f,"STR pc=%08x a=%08x v=%08x\n",jit_cur_pc,a,v); fflush(f); } }
 void __attribute__((stdcall)) jh_sw(uint32_t a, uint32_t v){ watch_store(a,v); watch_store(phys(a),v);
+    { static int n; if(getenv("H_SWTRACE")&&((a==0x80050000u||a==0x800507fcu||a==0x80040038u)&&n<10||(v&3&&(v>>26)==0x2Fu)&&n<26)){n++; if(jit_rc_log){fprintf(jit_rc_log,"SWTX #%d a=%08x v=%08x pc=%08x\n",n,a,v,jit_cur_pc); fflush(jit_rc_log);} } }
     if((a&0xFFFF0000u)==0xFFFE0000u){ exvbd[(a&0xFFF)>>2]=v; devlog("HW",a,v); return; }
-    if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; devlog("WR",a,v); return; } a=phys(a);
+    if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; if(o==0x1810)g_gpuw++; devlog("WR",a,v); return; } a=phys(a);
     if(g_vecprot && a>=0x80u && a<0xC0u && psx_ram && v!=0u){ *(uint32_t*)(psx_ram+0x9300u+(a&0x3Cu))=v; watch_store(a,v); return; }  /* 向量页写保护(HLE) */
     if(a+4<=0x200000u&&psx_ram) *(uint32_t*)(psx_ram+a)=v; }
 uint32_t __attribute__((stdcall)) jh_lb(uint32_t a){ return (jh_lw(a&~3u)>>(8*(a&3)))&0xff; }        /* 有/无符号同低字节，lb 符号扩展在调用点做 */
@@ -160,7 +164,7 @@ static int emit_term(uint32_t tk, uint32_t nt, int mode){ /* 0=恒跳tk 1=条件
     if(mode==0){ store_pc_imm(tk); ret_(); return !ovf; }
     if(mode==3){ store_pc_imm(nt); ret_(); return !ovf; }
     /* flag 语义：psx_state 空闲字节 ST+124=1→跳 tk。ZF 置 → jz 落 nt，fall-through 走 tk */
-    b1(0xA0); b4(ST+124u); b1(0x84); b1(0xC0); b1(0x74); /* mov al,[ST+124]; test al,al; jz <槽> */
+    b1(0xA0); b4(ST+140u); b1(0x84); b1(0xC0); b1(0x74); /* mov al,[ST+124]; test al,al; jz <槽> */
     uint8_t *disp=E; b1(0);
                               /* 槽地址在写入前捕获（b1 先写后 ++）*/
     b1(0xC7); b1(0x05); b4(PCR); b4(tk); b1(0xC3);       /* flag=1 路径（fall-through）*/
@@ -174,13 +178,14 @@ static int emit_term(uint32_t tk, uint32_t nt, int mode){ /* 0=恒跳tk 1=条件
 /* 翻译一个基本块；返回入口 ptr，失败 NULL */
 static void *emit_block(uint32_t vpc0){
     uint32_t vpc=vpc0;
-    int pend=0, pend_mode=0; uint32_t pend_tk=0, pend_nt=0;
+    int pend=0, pend_mode=0; uint32_t pend_w=0; uint32_t pend_tk=0, pend_nt=0;
     if(pool_used+4096>POOL_CAP) return NULL;
     uint8_t *buf=code_pool+pool_used; pool_used+=4096;
     E=buf; EEND=buf+4096; EMAX=EEND;
     if(g_dbg_emit) fprintf(stderr,"[BUF] vpc=%08x buf=%p pool=%p used=%03x\n",vpc0,(void*)buf,(void*)code_pool,pool_used);
     for(int n=0;n<32;n++){
-        uint32_t w; if(!ram_fetch(vpc,&w)){ jit_fail_pc=vpc; jit_fail_op=0xFFFFFFFFu; return NULL; }
+        uint32_t w; if(!ram_fetch(vpc,&w)){ jit_fail_pc=vpc; jit_fail_op=0xFFFFFFFFu;
+            return NULL; }
         jit_fail_pc=vpc; jit_fail_op=w;
         uint32_t op=(w>>26)&63, rs=(w>>21)&31, rt=(w>>16)&31, rd=(w>>11)&31, sa=(w>>6)&31, f3=w&63;
         int32_t si=(int32_t)(int16_t)(w&0xFFFF); uint32_t uimm=w&0xFFFF;
@@ -188,7 +193,13 @@ static void *emit_block(uint32_t vpc0){
         int is_nop=(w==0 || (op==0 && rs==0 && f3==0 && rd==0));
         if(pend && is_nop){ vpc+=4;
             if(g_dbg_emit) fprintf(stderr,"[TERMn] mode=%d tk=%08x nt=%08x\n",pend_mode,pend_tk,pend_nt);
-            if(pend_mode==4){ rdd((int)pend_tk); store_pc_eax(); ret_(); }        /* jr 延迟槽=NOP */
+            if(pend_mode==4){
+                if((pend_w&0xFC00003Fu)==0x09u){                                   /* jalr: 链接=jalr_pc+8(vpc 现=jalr+4) */
+                    uint32_t lreg=(pend_w>>11)&31u;
+                    if(lreg){ mov_imm_eax(vpc); wrr((int)lreg); }   /* nop 槽 flush 时 vpc 已=jalr+8 */
+                }
+                rdd((int)pend_tk); store_pc_eax(); ret_();
+            }
             else if(!emit_term(pend_tk,pend_nt,pend_mode)) return NULL;
             return buf; }
         if(is_nop){ vpc+=4; continue; }
@@ -201,9 +212,8 @@ static void *emit_block(uint32_t vpc0){
             case 2: if(rd){ rdd(rt); mov_ecx_imm(sa&31); shr_eax_cl(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
             case 3: if(rd){ rdd(rt); mov_ecx_imm(sa&31); sar_eax_cl(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
             case 8: case 9: {   /* jr / jalr：rs→pc（延迟槽后发射）*/
-                if(f3==9){ mov_imm_eax(vpc+8); wrr(rd?rd:31); }
                 if(pend) return NULL;                 /* 槽内再分支：弃 */
-                pend=1; pend_mode=4; pend_tk=rs; pend_nt=0; vpc+=4; continue; }
+                pend=1; pend_mode=4; pend_tk=rs; pend_nt=0; pend_w=w; vpc+=4; continue; }
             case 12: case 13:   /* syscall(kind=1) / break(kind=3)：延迟槽后停机 */
                 if(pend){ if(!emit_term(pend_tk,pend_nt,2)) return NULL; return buf; }
                 store_pc_imm(vpc+4); b1(0xC6); b1(0x05); b4(ST+132u); b1(1); b1(0xC6); b1(0x05); b4(HK); b1(f3==12?1:3); ret_(); return ovf?NULL:buf;
@@ -213,15 +223,15 @@ static void *emit_block(uint32_t vpc0){
                 else if(f3c==1 && rd<32){ mov_imm_eax(rd); push_eax(); call_ptr(H32(jh_cop0_read)); if(rt)wrr((int)rt); }
                 vpc+=4; if(pend)goto slot_done; continue; }
             case 18: case 19: vpc+=4; if(pend)goto slot_done; continue;  /* COP1/COP2 NOP */
-            case 32: case 33: if(rd){ rdd(rs); add_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 34: case 35: if(rd){ rdd(rs); sub_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 36: if(rd){ rdd(rs); and_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 37: if(rd){ rdd(rs); or_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 38: if(rd){ rdd(rs); xor_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 39: if(rd){ rdd(rs); or_eax_mem(); not_eax(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 32: case 33: if(rd){ rdd(rs); set_edx_r((int)rt); add_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;   /* add/addu: [rs]+[rt] — 勘误: EDX 须指 rt(原 [rs]+[rs] 自加 bug) */
+            case 34: case 35: if(rd){ rdd(rs); set_edx_r((int)rt); sub_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 36: if(rd){ rdd(rs); set_edx_r((int)rt); and_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 37: if(rd){ rdd(rs); set_edx_r((int)rt); or_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 38: if(rd){ rdd(rs); set_edx_r((int)rt); xor_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 39: if(rd){ rdd(rs); set_edx_r((int)rt); or_eax_mem(); not_eax(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
             case 40: if(rd){ rdd(rs); neg_eax(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 42: if(rd){ rdd(rs); cmp_eax_mem(); setcc_cl(0x0C); movzx_ecx_cl(); mov_eax_ecx(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
-            case 43: if(rd){ rdd(rs); cmp_eax_mem(); setcc_cl(0x02); movzx_ecx_cl(); mov_eax_ecx(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 42: if(rd){ rdd(rs); set_edx_r((int)rt); cmp_eax_mem(); setcc_cl(0x0C); movzx_ecx_cl(); mov_eax_ecx(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
+            case 43: if(rd){ rdd(rs); set_edx_r((int)rt); cmp_eax_mem(); setcc_cl(0x02); movzx_ecx_cl(); mov_eax_ecx(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
             default: return NULL;
             }
         case 8: if(rt){ rdd(rs); add_eax_imm(si); wrr(rt);} vpc+=4; if(pend)goto slot_done; continue;
@@ -254,8 +264,8 @@ static void *emit_block(uint32_t vpc0){
             if(pend) return NULL;
             uint32_t tk=(vpc+4)+(uint32_t)((si<<2)), nt=vpc+8;   /* 不跳=跳过延迟槽 */
             if(g_dbg_emit) fprintf(stderr,"[RAW] vpc=%08x si=%d shl=%08x tk=%08x nt=%08x\n",vpc,si,(si<<2),tk,nt);
-            if(op==4||op==5){ rdd(rs); set_edx_r(rt); cmp_eax_mem(); setcc_al(op==4?0x04:0x05); b1(0xA2); b4(ST+124u); }
-            else { rdd(rs); cmp_eax_imm(0); setcc_al(op==6?0x06:0x0F); b1(0xA2); b4(ST+124u); }
+            if(op==4||op==5){ rdd(rs); set_edx_r(rt); cmp_eax_mem(); setcc_al(op==4?0x04:0x05); b1(0xA2); b4(ST+140u); }
+            else { rdd(rs); cmp_eax_imm(0); setcc_al(op==6?0x06:0x0F); b1(0xA2); b4(ST+140u); }
             if(g_dbg_emit) fprintf(stderr,"[BR] vpc=%08x vpc4=%08x si=%d si2=%08x tk=%08x nt=%08x w=%08x\n",vpc,vpc+4,si,(si<<2),tk,nt,w);
             pend=1; pend_mode=1; pend_tk=tk; pend_nt=nt; vpc+=4; continue; }
         case 16: case 17: { uint32_t f3c=(w>>6)&31u, rt=(w>>16)&31u, rd=(w>>11)&31u;
@@ -270,11 +280,17 @@ static void *emit_block(uint32_t vpc0){
         }
     slot_done:
         /* 延迟槽指令执行完毕 → 立即发射终止 */
-        if(pend_mode==4){ rdd((int)pend_tk); store_pc_eax(); ret_(); return ovf?NULL:buf; }
+        if(pend_mode==4){
+            if((pend_w&0xFC00003Fu)==0x09u){ uint32_t lreg=(pend_w>>11)&31u;       /* jalr+非NOP槽: 槽已执行, vpc=jalr+8 */
+                if(lreg){ mov_imm_eax(vpc); wrr((int)lreg); } }
+            rdd((int)pend_tk); store_pc_eax(); ret_(); return ovf?NULL:buf; }
         if(!emit_term(pend_tk,pend_nt,pend_mode)) return NULL;
         return buf;
     }
-    if(pend){ if(pend_mode==4){ rdd((int)pend_tk); store_pc_eax(); ret_(); } else if(!emit_term(pend_tk,pend_nt,pend_mode)) return NULL; return buf; }
+    if(pend){ if(pend_mode==4){
+            if((pend_w&0xFC00003Fu)==0x09u){ uint32_t lreg=(pend_w>>11)&31u;       /* jalr 槽=分支: 弃(上文 return NULL), 此处仅 jr 族 */
+                if(lreg){ mov_imm_eax(vpc); wrr((int)lreg); } }
+            rdd((int)pend_tk); store_pc_eax(); ret_(); } else if(!emit_term(pend_tk,pend_nt,pend_mode)) return NULL; return buf; }
     store_pc_imm(vpc); ret_();
     return ovf?NULL:buf;
 }
@@ -302,7 +318,7 @@ int jit_run(uint32_t max_blocks){
             if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op); fflush(f);} } return 2; }
             cc[h].vpc=p; cc[h].code=c;
         } else if(g_dbg_emit) fprintf(stderr,"[HIT] p=%08x code=%08x h=%d\n",p,(unsigned)(uintptr_t)cc[h].code,h);
-        { static int step=0; if(getenv("JIT_DEBUG")&&step<40){ uint32_t *u=(uint32_t*)cc[h].code;
+        { static int step=0; if(getenv("JIT_DEBUG")&&step<300){ uint32_t *u=(uint32_t*)cc[h].code;
           fprintf(stderr,"[B%u pc=%08x code=%p]",step,psx_state.pc,cc[h].code);
           for(int q=0;q<12;q++) fprintf(stderr," %08x",u[q]); fprintf(stderr,"\n");
           fflush(stderr); }
@@ -331,26 +347,47 @@ int emit_block_dbg(uint32_t vpc, uint8_t **out, uint32_t *len){ return emit_bloc
 int emit_block_dbg_wrap(uint32_t v,uint8_t**o,uint32_t*l){ return emit_block_dbg_any(v,o,l); }
 
 /* ---------------- htrace 库接口（H-10b BIOS-JIT 激活） ---------------- */
+void jit_lib_flush_blocks(void){ cache_inval(); }
+uint32_t jit_lib_gpuw(void){ return g_gpuw; }
 int  jit_lib_load_rom(const uint8_t *rom_shadow){ psx_rom=rom_shadow; return jit_init(); }
 static int jit_rootcall_serve(void);
 int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,uint32_t win_base,int backfill){
+    if(!psx_ram) jit_init();
     psx_state.pc=entry; psx_state.halted=0; psx_state.halt_kind=0; cache_inval();
-    static uint32_t seq[8192]; uint32_t nseq=0,done=0; uint32_t lastrep=entry, rep=0;
+    static uint32_t seq[65536]; uint32_t nseq=0,done=0; uint32_t lastrep=entry, rep=0;
     jit_rc_log=log;
+    if(getenv("H_CDHLE")&&psx_ram){ extern void hlecd_install_pub(void); hlecd_install_pub(); }
     for(;done<max_blocks;done++){
         if(psx_state.halted) break;
         uint32_t p=psx_state.pc, h=(p>>2)&(CSLOTS-1);
-        if(p==lastrep){ if(++rep>4000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
+        if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
         else { lastrep=p; rep=0; }
-        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p); if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
-        if(nseq<8192) seq[nseq++]=p;
+        { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
+        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
+                      for(uint32_t q=(nseq>8?nseq-8:0); q<nseq && q<65536;q++) fprintf(f,"  PREV[%u]=%08x\n",q,seq[q]);
+                      fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
+        if(nseq<65536) seq[nseq++]=p; else done=1;
+        { static int st2=0; if(getenv("JIT_DEBUG")&&st2<400){ uint32_t *u=(uint32_t*)cc[h].code;
+            fprintf(stderr,"[T%u pc=%08x code=%p]",st2,p,cc[h].code);
+            for(int q=0;q<60;q++) fprintf(stderr," %08x",u[q]); fprintf(stderr,"\n"); fflush(stderr); }
+          st2++; }
         ((void(*)())cc[h].code)();
         if(psx_state.halted && (psx_state.halt_kind==1||psx_state.halt_kind==3)){
             if(jit_rootcall_serve()) break; }
     }
     if(log){
         /* 压缩 PC 序列：连续 vpc 段合并为 lo..hi */
-        fprintf(log,"BIOS-JIT-CHAIN blocks=%u final=%08x halted=%d\n",nseq,psx_state.pc,psx_state.halted);
+        fprintf(log,"BIOS-JIT-CHAIN blocks=%u final=%08x halted=%d hk=%u pc0=%08x s0=%08x s2=%08x s5=%08x t7=%08x ra=%08x t9=%08x v0=%08x\n",nseq,psx_state.pc,psx_state.halted,psx_state.halt_kind,psx_state.r[0],psx_state.r[16],psx_state.r[18],psx_state.r[21],psx_state.r[15],psx_state.r[31],psx_state.r[25],psx_state.r[2]);
+        { uint32_t a=0x80040038u,h2=(a>>2)&(CSLOTS-1);
+          if(log&&psx_ram){ fprintf(log,"DUMP38 ram=%08x %08x %08x %08x\n",*(uint32_t*)(psx_ram+0x38),0,0,0);
+            fprintf(log,"DUMP38 body:"); for(int q=14;q<22;q++) fprintf(log," %08x",((uint32_t*)(psx_ram))[q]);
+            fprintf(log,"\nDUMP38 slot vpc=%08x code=%p\n",cc[h2].vpc,(void*)cc[h2].code);
+            if(cc[h2].code){ fprintf(log,"DUMP38 x86:"); for(int q=0;q<12;q++) fprintf(log," %08x",((uint32_t*)cc[h2].code)[q]); fprintf(log,"\n"); }
+            fflush(log); } }
+        if(getenv("H_JITBLOCKS")){ uint32_t st=0; for(uint32_t i=st;i<nseq;i++) fprintf(log,"BLK %08x\n",seq[i&(65536-1)]);
+            if(psx_ram){ uint32_t base[]={0x0A0100u,0x0A0140u,0x40000u,0x50000u,0x41000u};
+                for(unsigned q2=0;q2<5;q2++) for(uint32_t o=0;o<0x20;o+=4) fprintf(log,"RAMB %06x=%08x\n",base[q2]+o,*(uint32_t*)(psx_ram+base[q2]+o)); }
+            fflush(log); }
         uint32_t i=0; int segs=0;
         while(i<nseq && segs<64){
             uint32_t lo=seq[i],hi=lo; uint32_t j=i+1;
@@ -496,8 +533,38 @@ void hleboot_install(void){
     *(uint32_t*)(psx_ram+0x6c)=0x80000000u|ds;   /* stderr devsw */
     #undef F
 }
+/* H-18a hlecd: 自研 C2 rootcall 后端(生成码 host/hlecd_code.h, ABI 见 docs/29) */
+#include "hlecd_code.h"
+static uint8_t g_cd_sec[2048]; static uint32_t g_cd_secno=0x10;
+void hlecd_install(void){
+    if(!psx_ram||!psx_rom) return;
+    if(getenv("H_CDHLE_EXE")){   /* 直供第一方 homebrew EXE 首 2048B(=PS-X EXE 头扇区, docs/29) */
+        FILE*fd=fopen(getenv("H_CDHLE_EXE"),"rb");
+        if(fd){ size_t got=fread(g_cd_sec,1,2048,fd); fclose(fd);
+                if(jit_rc_log){ fprintf(jit_rc_log,"CDHLE exe bytes=%zu magic=%.4s\n",got,(char*)g_cd_sec); fflush(jit_rc_log); } }
+    } else if(getenv("H_CDHLE_DISC")){
+        FILE*fd=fopen(getenv("H_CDHLE_DISC"),"rb");
+        if(fd){ fseek(fd,0,SEEK_END); long sz=ftell(fd);
+                long off=(g_cd_secno+150)*2352;
+                if(off+2048<=sz){ fseek(fd,off,SEEK_SET); fread(g_cd_sec,1,2048,fd); }
+                fclose(fd); }
+    }
+    memcpy(psx_ram+0x500,(const uint8_t*)psx_rom+0x10000,0x8BF0);
+    memcpy(psx_ram+0x41000u, g_cd_sec, 2048u);
+    memcpy(psx_ram+0x40000u, g_hlecd_code, sizeof g_hlecd_code);
+    uint32_t *q=(uint32_t*)(psx_ram+0x32E24u);
+    q[0]=0x08010000u; q[1]=0; q[2]=0; q[3]=0;
+    *(uint32_t*)(psx_ram+0x150u)=0x80032E24u; *(uint32_t*)(psx_ram+0x154u)=0u; *(uint32_t*)(psx_ram+0x158u)=0x801FFF00u;
+    *(uint32_t*)(psx_ram+0x0A0100u)=0x1001u;   /* 0x802A0100 经 phys 2MB 回绕=物理 0xA0100(真机同义) */
+    if(jit_rc_log){ fprintf(jit_rc_log,"CDHLE install sec=%u disc=%s magic=%.8s\n",g_cd_secno,getenv("H_CDHLE_DISC")?getenv("H_CDHLE_DISC"):"(none)",(char*)g_cd_sec); fflush(jit_rc_log); }
+}
+
+void hlecd_install_pub(void){ hlecd_install(); }
+unsigned char* jit_lib_ram_pub(void){ return psx_ram; }
 int jit_lib_bios_call2(uint32_t entry_pc,uint32_t budget,uint32_t*v0,uint32_t*kind,uint32_t*endpc){
+    if(!psx_ram) jit_init();   /* htrace 路径不显式 init: 惰性补齐(否则 RAM fetch 全灭) */
     if(getenv("H_HLEBOOT")&&getenv("H_HLE_EARLY")) hleboot_install();
+    if(getenv("H_CDHLE")&&psx_ram&&!getenv("H_CDHLE_DONE")) hlecd_install();
     if(getenv("H_ROOT2")&&psx_ram&&!getenv("H_ROOT2_DONE")){   /* docs/19: root2 线程入口 HLE 桩 + RAM 0x150 头 */
         uint32_t *q=(uint32_t*)(psx_ram+0x32E24u);
         q[0]=0x24020001u; q[1]=0x03E00008u; q[2]=0u;
@@ -508,29 +575,47 @@ int jit_lib_bios_call2(uint32_t entry_pc,uint32_t budget,uint32_t*v0,uint32_t*ki
     return n;
 }
 int jit_lib_bios_call_log(uint32_t entry_pc,uint32_t budget,uint32_t *ret_v0,FILE*log){
+    if(!psx_ram) jit_init();   /* htrace 路径不显式 init: 惰性补齐(否则 RAM fetch 全灭) */
     psx_state.pc=entry_pc; psx_state.halted=0; psx_state.halt_kind=0; jit_rc_log=log;
-    int n=0; uint32_t lastrep=entry_pc, rep=0; static uint32_t hb[8192];
+    int n=0; uint32_t lastrep=entry_pc, rep=0; static uint32_t hb[65536];
     for(;n<(int)budget;n++){
-        uint32_t p=psx_state.pc,h=(p>>2)&(CSLOTS-1); hb[n&8191]=p; jit_cur_pc=p;
-        if(p==lastrep){ if(++rep>4000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
+        uint32_t p=psx_state.pc,h=(p>>2)&(CSLOTS-1); hb[n&(65536-1)]=p; jit_cur_pc=p;
+        if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
         else { lastrep=p; rep=0; }
-        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p); if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
+        { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
+        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
+                      { for(int q=((int)n>8?(int)n-8:0); q<(int)n;q++) fprintf(f,"  PREV[%d]=%08x\n",q,hb[q&(65536-1)]); }
+                      fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
         ((void(*)())cc[h].code)();
         if(psx_state.halted){ if(jit_rootcall_serve()) break; }
     }
     if(getenv("H_JITBLOCKS")&&log&&psx_ram){ for(uint32_t o=0x00;o<0x100;o+=4) fprintf(log,"RAMB %04x=%08x\n",o,*(uint32_t*)(psx_ram+o)); fflush(log); }
-    if(getenv("H_JITBLOCKS")&&log){ uint32_t st=0; for(uint32_t i=st;i<(uint32_t)n;i++) fprintf(log,"BLK %08x\n",hb[i&8191]); fprintf(log,"BLK end=%08x\n",psx_state.pc); fflush(log); }
+    if(getenv("H_JITBLOCKS")&&log){ uint32_t st=0; for(uint32_t i=st;i<(uint32_t)n;i++) fprintf(log,"BLK %08x\n",hb[i&(65536-1)]); fprintf(log,"BLK end=%08x\n",psx_state.pc); fflush(log); }
     if(ret_v0)*ret_v0=psx_state.r[2];
     return n;
 }
 
+/* ---------------- 自测 ---------------- */
+#ifdef MJTEST
+int emit_block_dbg(uint32_t vpc, uint8_t **out, uint32_t *len);
+int main(void){
+    if(jit_init()){ printf("init fail\n"); return 1; }
+    uint32_t prog[]={0x24020005u, 0x24091234u, 0xAC092000u, 0x8C0A2000u};
+    *(uint32_t*)(psx_ram+0x2000)=0xDEADBEEF;
+    for(int i=0;i<4;i++) *(uint32_t*)(psx_ram+0x100000+i*4)=prog[i];
+    psx_state.pc=0x100000;
+    uint8_t *code; uint32_t len;
+    if(emit_block_dbg(0x100000,&code,&len)){
+        printf("block len=%u:",len);
+        for(uint32_t i=0;i<len && i<48;i++) printf(" %02x",code[i]);
+        printf("\n"); fflush(stdout);
+        ((void(*)())code)();
+        printf("direct: r2=%u r9=%#x r10=%#x mem2000=%#x pc=%#x\n",
+               psx_state.r[2],psx_state.r[9],psx_state.r[10],*(uint32_t*)(psx_ram+0x2000),psx_state.pc);
+    } else printf("emit fail\n");
+    return 0;
+}
+#endif
+void* jit_dbg_lastblock(void){ uint32_t h=(psx_state.pc>>2)&(CSLOTS-1); return cc[h].code; }
 
-__asm__(
-".text\n"
-".globl trampoline_call\n"
-".type trampoline_call,@function\n"
-"trampoline_call:\n"
-"\tpushl %ebp\n\tmovl %esp,%ebp\n\tmovl 8(%ebp),%eax\n\tcall *%eax\n\tpopl %ebp\n\tret\n"
-".size trampoline_call,.-trampoline_call\n");
-
-void jit_lib_flush_blocks(void){ cache_inval(); }
+uint32_t jit_lib_gpuw_probe(void){ return g_gpuw; }

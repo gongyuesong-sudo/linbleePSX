@@ -15,7 +15,8 @@ B=$(grep -o 'blocks=[0-9]*' <<<"$OUT" | cut -d= -f2)
 O=$(grep -o 'outside=[0-9]*' <<<"$OUT" | cut -d= -f2)
 P=$(grep -o 'pc=[0-9a-f]*' <<<"$OUT" | cut -d= -f2)
 [ "${O:-0}" -gt 200 ] || { echo "FAIL: 越页=$O (要求>200=唤醒脱离空闲环)"; exit 1; }
-[ "$P" = "04500e81" ] || { echo "FAIL: 汇流终点=$P (要求 04500e81)"; exit 1; }
+# task-041 重锚: 旧终点 04500e81 为分支 flag-clobber-ra 伪像(奇数+1); 真语义终点 04500e82
+[ "$P" = "04500e82" ] || { echo "FAIL: 汇流终点=$P (要求 04500e82, task-041 重锚)"; exit 1; }
 echo "PASS B: 唤醒脱离轮询环 blocks=$B outside=$O, 达设备派发汇流节点 $P"
 
 OUT2=$(GSTATE="$G" ./host/build/golden_cpu_probe ../psxbios/SCPH1001.BIN 2000 2>/dev/null | tail -1)

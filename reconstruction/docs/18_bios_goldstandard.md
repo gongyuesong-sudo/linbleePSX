@@ -39,3 +39,9 @@
   img 模板 ABI（x86 回填）与设备驱动注册面（pad/card/CD），二者均超出 MIPS-JIT 宿主范围。
 - 定案：引擎驱动 BIOS 到游戏 = 需 (a) img 模板 ABI 逆向回填 x86 或 (b) 完整设备驱动面；
   游戏运行路线维持 DuckStation（AGENTS.md）。
+
+## 6. 勘误(SESSION-44, task-041 重锚)
+本文原链数字(chain 4199/停机设备指针面/EXN 事件路线)建立在 JIT addu 自操作与分支 flag-clobber-ra 两 bug 语义上(docs/29 §3)。
+新基线冷跳链越过 kernel 自装抵达 rootcall NewRootCmd(v0=80000010)处理槽未装边界(停机 3c15bd80)，
+不再途经 0xD964 rootcall cmd=1 停机面；EXN ROM 偏移语义(RAM 0x130=ROM 相对偏移)代码路径不变。
+详见 docs/30。

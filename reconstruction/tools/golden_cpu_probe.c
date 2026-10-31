@@ -90,7 +90,7 @@ int main(int argc, char** argv){
                 }
                 fails=1; break;
             } if(getenv("HLOG")) fprintf(stderr,"HALT pc=%08x hk=%u\n",psx_state.pc,psx_state.halt_kind);
-            if(getenv("TICK") && !inj && psx_state.halt_kind==2){
+            if(getenv("TICK") && !inj && (psx_state.halt_kind==2 || (psx_state.halt_kind==3 && psx_state.pc>=0xBFC4C1B0u && psx_state.pc<0xBFC4C1C0u))){  /* task-041: 新基线 break(hk3)亦为唤醒点; hk2=旧 emit-fail 伪哨兵 */
                 /* ROM 窗内停机=break 哨兵命中 → 一次完整唤醒周期收尾; RAM 零页停机=死模块滑行 → 单纯重导引 */
                 if(psx_state.pc>=0xBFC00000u && psx_state.pc<0xBFC80000u) cycles++;
                 psx_state=cp; psx_state.r[31]=0xBFC4C1B0u; psx_state.halted=0; psx_state.halt_kind=0; jit_lib_flush_blocks(); continue;

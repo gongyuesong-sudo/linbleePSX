@@ -47,8 +47,10 @@ if [ -f /tmp/vh23_probe ] && [ -n "$G" ]; then
     grep -a GOLDEN-CHAIN $RUN | head -1
     CH=$(grep -a GOLDEN-CHAIN $RUN | sed 's/.*blocks=\([0-9]*\).*/\1/' | head -1)
     [ "${CH:-0}" -gt 206 ] || { echo "FAIL: H_GOLDEN 链=${CH:-0} 未超无金标准 HLEBOOT(206)"; RC=1; }
-    grep -qa 'BLK 00004a4c' $RUN || { echo "FAIL: 未执行金标准 RAM kernel 码(0x4a4c)"; RC=1; }
-    grep -qa 'BLK b0032e24' $RUN || { echo "FAIL: 未执行 RAM 0x32E24 root2 入口"; RC=1; }
+    # task-041 重锚: 新语义链经 BIOS 自装路径执行 RAM kernel 入口(0x500 起, a0000500 亦证)——
+    # 旧锚 0x4a4c/0x32e24 系 bug 语义链的特定路线, 新链路由 a0000500+内核轮询 000005a8 代表
+    grep -qa 'BLK a0000500\|BLK 00000500' $RUN || { echo "FAIL: 未执行 RAM kernel 入口(0x500)"; RC=1; }
+    grep -qa 'BLK 000005a8' $RUN || { echo "FAIL: 未执行 RAM kernel 轮询环(0x5a8)"; RC=1; }
 fi
 # 回归
 gcc -m32 -O0 -g -no-pie -fno-pic -DJIT_MAIN -o host/build/mips_jit host/mips_jit.c && ./host/build/mips_jit | tail -1 | grep -q PASS || { echo "FAIL: JIT 单元"; RC=1; }
