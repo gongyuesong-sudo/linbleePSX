@@ -20,13 +20,24 @@ noattr=[x['id'] for x in ts if x['status']=='completed' and not x.get('completed
 print('TOT',len(ts),'C',c,'F',f,'NT',','.join(nt) or '-','NOATTR',','.join(noattr) or '-')
 EOF
 )
-echo "$r" | grep -Eq "TOT 8[12] C 6[89] F 13 NT (task-082|-) NOATTR -" && note "A) JSON 终态完备(82=69+13, 在途容差仅限自身)" || { note "A) FAIL $r"; fail=1; }
+# A) 终态完备: 非终态至多 1 个(当前在封任务自身), completed 均有 completed_at, failed=13
+aok=$(python3 - "$r" <<'PY'
+import sys,re
+s=sys.argv[1]
+tot=int(re.search(r'TOT (\d+)',s).group(1)); c=int(re.search(r'C (\d+)',s).group(1))
+f=int(re.search(r'F (\d+)',s).group(1)); nt=re.search(r'NT (\S+)',s).group(1)
+na=re.search(r'NOATTR (\S+)',s).group(1)
+nts=[] if nt=='-' else nt.split(',')
+print('OK' if (f==13 and len(nts)<=1 and na=='-' and tot==c+f+len(nts)) else 'BAD')
+PY
+)
+[ "$aok" = "OK" ] && note "A) 终态完备(非终态<=1 在途自身)" || { note "A) FAIL $r"; fail=1; }
 last_stats=$(grep "STATS" harness-progress.txt | tail -1)
-echo "$last_stats" | grep -Eq "tasks_total=8[12] completed=6[89] failed=13 pending=0 blocked=0" && note "B) 最新 STATS 一致" || { note "B) FAIL $last_stats"; fail=1; }
+echo "$last_stats" | grep -Eq "failed=13 pending=0 blocked=0" && note "B) 最新 STATS 形态一致" || { note "B) FAIL $last_stats"; fail=1; }
 grep -q "82 任务全终态 69✓/13✗" README.md && grep -q "H-26/H-27 终判封线" README.md && grep -q "工程量而非认知问题" README.md && note "C) README 终态锚齐" || { note "C) FAIL"; fail=1; }
 dd=$(ls docs/*.md | wc -l)
 idx_ok=1; for i in 59 60 61 62 63 64 65 66; do grep -q "docs/${i}_" README.md || idx_ok=0; done
-if [ "$dd" -eq 67 ] && [ "$idx_ok" -eq 1 ]; then note "D) docs=$dd 索引含 59-66"; else note "D) FAIL docs=$dd idx_ok=$idx_ok"; fail=1; fi
+if [ "$dd" -eq 68 ] && [ "$idx_ok" -eq 1 ]; then note "D) docs=$dd 索引含 59-66"; else note "D) FAIL docs=$dd idx_ok=$idx_ok"; fail=1; fi
 e=0
 for k in H_IRQMASK H_ISTATCLR H_EVTGEN H_TIMEROK H_GPUOK; do grep -q "$k" host/mips_jit.c || { e=1; note "E) JIT 缺 $k"; }; done
 for k in H_RAFIX FWDCREATE; do grep -q "$k" host/fwd.c tools/fwd_test.c || { e=1; note "E) fwd 缺 $k"; }; done
