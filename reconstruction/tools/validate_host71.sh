@@ -33,6 +33,6 @@ printf "b0 3d\n" > /tmp/h71_3d.txt
 d=$(env H_TIMEROK=1 H_I044OK=1 H_IRQMASK=0xFFFFFFFF H_ISTATCLR=1 H_EVTGEN=0x1 FWDLIST=/tmp/h71_3d.txt timeout 300 ./host/build/fwd_test 4000000 2>&1 | grep "^FWD vec")
 echo "$d" | grep -q "blocks=207248 haltpc=000026d0" && note "D) 五段形态逐字恒" || { note "D) FAIL $d"; fail=1; }
 grep -q "运行时生成" docs/66_mips_jit_falsified_vm.md && grep -q "工程量问题而非认知问题" docs/66_mips_jit_falsified_vm.md && grep -q "sb v0,0x20(sp)" docs/66_mips_jit_falsified_vm.md && note "E) docs/66 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "66_mips_jit_falsified_vm" README.md && [ "$dd" -eq 72 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "66_mips_jit_falsified_vm" README.md && [ "$dd" -eq 73 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST71 CHECK PASS" || echo "HOST71 CHECK FAIL"
 [ $fail -eq 0 ]
