@@ -38,7 +38,7 @@ PYEOF
 n=$(grep -cE '^\| 0x[0-9a-f]{2} \| 0x[0-9a-f]{2} \|' docs/47_rootcmd_names.md)
 [ "$n" -eq 50 ] && grep -q "锚定率 \*\*14/50\*\*" docs/47_rootcmd_names.md && grep -q "三种安装视图" docs/47_rootcmd_names.md \
   && note "C) docs/47 表 $n 行+锚齐" || { note "C) FAIL 表行=$n"; fail=1; }
-d=$(ls docs/*.md | wc -l); grep -q "47_rootcmd_names" README.md && [ "$d" -eq 52 ] \
+d=$(ls docs/*.md | wc -l); grep -q "47_rootcmd_names" README.md && [ "$d" -eq 53 ] \
   && note "D) README 索引与 docs=$d 一致" || { note "D) FAIL docs=$d README 锚"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST51 CHECK PASS" || echo "HOST51 CHECK FAIL"
 [ $fail -eq 0 ]

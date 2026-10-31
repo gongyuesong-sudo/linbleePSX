@@ -49,7 +49,7 @@ assert n==50 and uni==26,(n,uni)
 print(f"HOST53: A/C) 双态复跑与 docs/49 逐行一致 n={n} 并集={uni}")
 PYEOF
 if grep -q "零分歧" docs/49_forward_subset.md && grep -q "批1(纯转发" docs/49_forward_subset.md && grep -q "BREAK 并集 = 26/50" docs/49_forward_subset.md; then note "B) docs/49 锚齐"; else note "B) 缺锚"; fail=1; fi
-d=$(ls docs/*.md | wc -l); grep -q "49_forward_subset" README.md && [ "$d" -eq 52 ] \
+d=$(ls docs/*.md | wc -l); grep -q "49_forward_subset" README.md && [ "$d" -eq 53 ] \
   && note "D) README 索引与 docs=$d 一致" || { note "D) FAIL docs=$d"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST53 CHECK PASS" || echo "HOST53 CHECK FAIL"
 [ $fail -eq 0 ]
