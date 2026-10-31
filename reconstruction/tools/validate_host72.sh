@@ -37,7 +37,7 @@ echo "$last_stats" | grep -Eq "failed=13 pending=0 blocked=0" && note "B) 最新
 grep -q "82 任务全终态 69✓/13✗" README.md && grep -q "H-26/H-27 终判封线" README.md && grep -q "工程量而非认知问题" README.md && note "C) README 终态锚齐" || { note "C) FAIL"; fail=1; }
 dd=$(ls docs/*.md | wc -l)
 idx_ok=1; for i in 59 60 61 62 63 64 65 66; do grep -q "docs/${i}_" README.md || idx_ok=0; done
-if [ "$dd" -eq 70 ] && [ "$idx_ok" -eq 1 ]; then note "D) docs=$dd 索引含 59-66"; else note "D) FAIL docs=$dd idx_ok=$idx_ok"; fail=1; fi
+if [ "$dd" -eq 71 ] && [ "$idx_ok" -eq 1 ]; then note "D) docs=$dd 索引含 59-66"; else note "D) FAIL docs=$dd idx_ok=$idx_ok"; fail=1; fi
 e=0
 for k in H_IRQMASK H_ISTATCLR H_EVTGEN H_TIMEROK H_GPUOK; do grep -q "$k" host/mips_jit.c || { e=1; note "E) JIT 缺 $k"; }; done
 for k in H_RAFIX FWDCREATE; do grep -q "$k" host/fwd.c tools/fwd_test.c || { e=1; note "E) fwd 缺 $k"; }; done
