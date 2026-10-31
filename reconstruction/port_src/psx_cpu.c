@@ -455,9 +455,33 @@ int cmd_bios_run(int argc, char **argv)
     static uint32_t hist[HB];
     uint32_t exc_seen = 0, first_cause = 0, first_epc = 0, first_op = 0;
     uint32_t n = 0;
+    static uint32_t tpch[4096]; int pch_on = getenv("BIOSRUN_PCHIST") != NULL;
+    /* 楔6b: 分段计数 + "跳入零区首瞬"侦测(前一条=跳转且目标指令字=0) */
+    uint32_t seg_rom=0,seg_lo=0,seg_main=0,seg_dev=0,seg_other=0, lost=0;
     while (n < nsteps) {
         uint32_t e0 = c.exc_n;
+        uint32_t pc_pre = c.npc;              /* 本步将执行的指令地址 */
+        uint32_t insn_at = 0xFFFFFFFFu;
+        { uint32_t w2; void *p2 = psx_translate(&core, pc_pre, &w2);
+          if (p2 && w2 != PSX_WIN_BAD) insn_at = *(volatile uint32_t *)p2; }
         psx_cpu_step(&c);
+        if (pch_on) tpch[(c.pc >> 4) & 4095u]++;
+        uint32_t q = c.pc;
+        if (q >= 0xBFC00000u && q < 0xBFC80000u) seg_rom++;
+        else if (q < 0x10000u) seg_lo++;
+        else if (q < 0x200000u) seg_main++;
+        else if (q >= 0x1F800000u && q < 0x1F810000u) seg_dev++;
+        else seg_other++;
+        uint32_t jmp = ((insn_at>>26)==2 || (insn_at>>26)==3 ||
+                        ((insn_at>>26)==0 && ((insn_at&63)==8 || (insn_at&63)==9)));
+        uint32_t nb = 0;
+        { uint32_t w3; void *p3 = psx_translate(&core, c.npc, &w3);
+          if (p3 && w3 != PSX_WIN_BAD) nb = *(volatile uint32_t *)p3; }
+        if (jmp && nb == 0 && lost < 6) {
+            printf("BISO_LOST step=%u from=%x insn=%08x -> zero_target=%x ra=%x v0=%x\n",
+                   n, c.pc, insn_at, c.npc, c.gpr[31], c.gpr[2]);
+            lost++;
+        }
         n++;
         if (c.exc_n != e0) {
             uint32_t epc = c.cop0[14];
@@ -483,6 +507,21 @@ int cmd_bios_run(int argc, char **argv)
         if (bi < 0 || best == 0) break;
         hist[bi] = 0;
         printf("BISO_TOP #%d x%u\n", k, best);
+    }
+    printf("BISO_SEG rom=%u ramlo=%u rammain=%u dev=%u other=%u\n",
+           seg_rom, seg_lo, seg_main, seg_dev, seg_other);
+    if (getenv("BIOSRUN_DUMP")) {   /* 战役侦察: dump RAM 低段运行态指令流 */
+        FILE *fp = fopen(getenv("BIOSRUN_DUMP"), "wb");
+        if (fp) { fwrite((void *)(uintptr_t)PSX_GPA_RAM_BASE, 1, 0x800, fp); fclose(fp); }
+    }
+    if (pch_on) {
+        for (int k = 0; k < 8; k++) {
+            uint32_t best = 0; int bi = -1;
+            for (int i = 0; i < 4096; i++) if (tpch[i] > best) { best = tpch[i]; bi = i; }
+            if (bi < 0 || best == 0) break;
+            tpch[bi] = 0;
+            printf("BISO_PC #%d pc~0x%x x%u\n", k, (uint32_t)bi << 4, best);
+        }
     }
     printf("BISO_EV gpr: ");
     for (int i = 0; i < 32; i++) printf("%08x ", c.gpr[i]);
