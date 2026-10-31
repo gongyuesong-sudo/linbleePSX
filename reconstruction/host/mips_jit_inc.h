@@ -52,7 +52,10 @@ static uint32_t g_gpuw;   /* GP0(0x1F801810) 命令写计数(H-17) */
 static uint32_t exvbd[0x1000>>2];   /* 0xFFFE0000-0xFFFEFFFF: ExceptionVectorBaseData 硬件寄存器组(RAM 0x130 类写入实为硬件窗) */
 static uint32_t dev_read(uint32_t a){ uint32_t o=a&0xFFFF;
     if(o>=0x1000&&o<=0x10FF) return dev_regs[o>>2];         /* GPU/IRQ 域默认 0 = ready */
-    if(o==0x1060) return dev_regs[0x1060>>2];
+    if(o==0x1060) return dev_regs[o>>2];
+    { static int dr=-1; if(dr<0) dr=!!getenv("H_DEVRST");
+      if(dr && o>=0x1080 && o<=0x10FF) return dev_regs[o>>2];   /* H-21a(task-047): DMA0-7 控制块硬件复位=0(CHCR busy/trigger=0);
+         旧默认 0xFFFFFFFF 使 C2 DMA7 完成位轮询 0x1F801DAC 死环(实测 10008 次/链, docs/34) */ }
     return dev_regs[o>>2]?dev_regs[o>>2]:0xFFFFFFFFu; }
 static uint32_t cop0[32];
 #define COP0_EPC 14
@@ -380,6 +383,13 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
     for(;done<max_blocks;done++){
         if(psx_state.halted) break;
         uint32_t p=psx_state.pc, h=(p>>2)&(CSLOTS-1);
+        { static int rc=-1; static uint32_t pra4=0; static int nc=0;
+          if(rc<0){ rc=!!getenv("H_RACATCH"); pra4=psx_state.r[31]; }
+          if(rc && psx_state.r[31]==4u && pra4!=4u && nc<4){ nc++;
+            if(log){ uint32_t i; fprintf(log,"RACATCH#%d pc=%08x sp=%08x oldra=%08x prev:",nc,p,psx_state.r[29],pra4);
+              for(i=(nseq>8?nseq-8:0); i<nseq; i++) fprintf(log," %08x",seq[i&(65536-1)]);
+              fprintf(log,"\n"); fflush(log);} }
+          if(rc) pra4=psx_state.r[31]; }
         { static int ch=-1; if(ch<0) ch=!!getenv("H_C2HOME");   /* task-043 homebrew C2 根协议面 min 供给(docs/32) */
           if(ch && p==0xb0u && psx_ram){ uint32_t ci=psx_state.r[9];        /* 0xB0 根call向量: t1=cmd, 表 RAM[0x100+cmd*4](task-044) */
             if(ci<=0x47u){ uint32_t *sl=(uint32_t*)(psx_ram+0x100u+ci*4u);
