@@ -5,6 +5,7 @@
 fwd_init(bios_path, golden_ram_path)          # ROM+金标 RAM 整幅装载, 0=OK
 fwd_entry(vec, cmd, *pc)                      # 表解析(快照), 2=槽缺失
 fwd_call(vec, cmd, a0a3[4], *v0, budget, *blk)
+fwd_call2(..., *blk, *haltpc)   # 取证变体(task-065): 回读停机 pc
     rc=0 服务干净返回(v0 有效)  rc=1 需设备语境/超时
     rc=2 表槽缺失               rc=3 未初始化
 ```

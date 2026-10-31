@@ -28,10 +28,20 @@ int fwd_init(const char *bios_path,const char *golden_ram_path){
     FILE*f=fopen(bp,"rb"); if(!f||fread(rom,1,sizeof rom,f)!=(long)sizeof rom) return 2; fclose(f);
     if(jit_init()) return 2;
     if(jit_lib_load_rom(rom)) return 2;
+    { const char*lg=getenv("FWDLOG"); if(lg){ FILE*lf=fopen(lg,"w"); if(lf){ extern void jit_lib_set_rclog(FILE*); jit_lib_set_rclog(lf); } } }
     FILE*gf=fopen(gp,"rb");
     if(!gf||fread(psx_ram,1,0x200000,gf)!=0x200000){ if(gf)fclose(gf); return 2; } fclose(gf);
     { const uint32_t bs[3]={0x200u,0x874u,0x674u};
       for(int i=0;i<3;i++) memcpy(tab_snap[i],psx_ram+bs[i],sizeof tab_snap[i]); }
+    if(getenv("FWDEX")){   /* 批2(task-065): 自建向量跳板+派发块(与 hprobe PROBEEX 同源), 抗终态清零 */
+        uint32_t vec[]={0x3C080000u,0x250805C4u,0x01000008u,0u};
+        uint32_t bl0[]={0x24080200u,0x00094880u,0x01094020u,0x8D080000u,0u,0x01000008u};
+        uint32_t bl1[]={0x3c080000u,0x25080874u,0x00094880u,0x01094020u,0x8D080000u,0u,0x01000008u};
+        memcpy(psx_ram+0x0A0u,vec,12); vec[1]=0x250805E0u; memcpy(psx_ram+0x0B0u,vec,12);
+        vec[1]=0x25080600u; memcpy(psx_ram+0x0C0u,vec,12);
+        memcpy(psx_ram+0x5C4u,bl0,sizeof bl0); memcpy(psx_ram+0x5E0u,bl1,sizeof bl1); memcpy(psx_ram+0x600u,bl1,sizeof bl1);
+        extern void jit_lib_flush_blocks(void); jit_lib_flush_blocks();
+    }
     g_ready=1; return 0;
 }
 
@@ -44,8 +54,8 @@ int fwd_entry(uint32_t vec,uint32_t cmd,uint32_t *pc_out){
     return 0;
 }
 
-int fwd_call(uint32_t vec,uint32_t cmd,const uint32_t a0a3[4],
-             uint32_t *v0,uint32_t budget,uint32_t *blocks_out){
+int fwd_call2(uint32_t vec,uint32_t cmd,const uint32_t a0a3[4],
+              uint32_t *v0,uint32_t budget,uint32_t *blocks_out,uint32_t *pc_out){
     if(!g_ready) return 3;
     uint32_t ev; if(fwd_entry(vec,cmd,&ev)) return 2;
     if(!budget) budget=200000u;
@@ -67,6 +77,11 @@ int fwd_call(uint32_t vec,uint32_t cmd,const uint32_t a0a3[4],
     }
     if(v0)*v0=psx_state.r[2];
     if(blocks_out)*blocks_out=b;
+    if(pc_out)*pc_out=psx_state.pc;
     uint32_t c=psx_state.pc;
     return (c>=0xBFC4C1B0u&&c<0xBFC4C1C0u)?0:1;
+}
+int fwd_call(uint32_t vec,uint32_t cmd,const uint32_t a0a3[4],
+             uint32_t *v0,uint32_t budget,uint32_t *blocks_out){
+    return fwd_call2(vec,cmd,a0a3,v0,budget,blocks_out,NULL);
 }

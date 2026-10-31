@@ -15,5 +15,8 @@ int  fwd_entry(uint32_t vec, uint32_t cmd, uint32_t *pc);
  * 返回: 0=服务干净返回(v0/blk 有效); 1=需设备语境/自旋超时; 2=表槽缺失; 3=未初始化。 */
 int  fwd_call(uint32_t vec, uint32_t cmd, const uint32_t a0a3[4],
               uint32_t *v0, uint32_t budget, uint32_t *blocks_out);
+/* 变体: 额外回读停机 pc(取证分型用, task-065)。pc_out 可为 NULL。 */
+int  fwd_call2(uint32_t vec, uint32_t cmd, const uint32_t a0a3[4],
+               uint32_t *v0, uint32_t budget, uint32_t *blocks_out, uint32_t *pc_out);
 
 #endif
