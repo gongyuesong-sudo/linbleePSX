@@ -57,6 +57,11 @@ static uint32_t cop0[32];
 #define COP0_EPC 14
 uint32_t __attribute__((stdcall)) jh_rfe(void){ cop0[12]&=~(1u<<30); return cop0[COP0_EPC]; }
 uint32_t __attribute__((stdcall)) jh_cop0_read(uint32_t r0){ return cop0[r0&31]; }
+static uint32_t jh_hi, jh_lo;   /* R3000A HI/LO(task-043: divu/mfhi 首用面 bfc012a8) */
+void __attribute__((stdcall)) jh_mult(uint32_t a,uint32_t b){ int64_t q=(int64_t)(int32_t)a*(int32_t)(int32_t)b; jh_lo=(uint32_t)q; jh_hi=(uint32_t)((uint64_t)q>>32); }
+void __attribute__((stdcall)) jh_multu(uint32_t a,uint32_t b){ uint64_t q=(uint64_t)a*(uint64_t)b; jh_lo=(uint32_t)q; jh_hi=(uint32_t)(q>>32); }
+void __attribute__((stdcall)) jh_div(uint32_t a,uint32_t b){ if(b){ jh_lo=(uint32_t)((int32_t)a/(int32_t)b); jh_hi=(uint32_t)((int32_t)a%(int32_t)b); } }
+void __attribute__((stdcall)) jh_divu(uint32_t a,uint32_t b){ if(b){ jh_lo=a/b; jh_hi=a%b; } }
 void __attribute__((stdcall)) jh_cop0_write(uint32_t r0,uint32_t v){ r0&=31; cop0[r0]=v;
     /* SR.BEV 1->0 迁移：异常向量从 ROM 镜像到 RAM（真实 CPU 由 BIOS 复制；此处跟随状态位忠实化） */
     if(r0==12 && psx_ram && psx_rom && !(v&0x04000000u) && !cop0[31]){ cop0[31]=1; memcpy(psx_ram,psx_rom,0x100); } }
@@ -217,12 +222,16 @@ static void *emit_block(uint32_t vpc0){
             case 12: case 13:   /* syscall(kind=1) / break(kind=3)：延迟槽后停机 */
                 if(pend){ if(!emit_term(pend_tk,pend_nt,2)) return NULL; return buf; }
                 store_pc_imm(vpc+4); b1(0xC6); b1(0x05); b4(ST+132u); b1(1); b1(0xC6); b1(0x05); b4(HK); b1(f3==12?1:3); ret_(); return ovf?NULL:buf;
-            case 16: case 17: {   /* COP0: mfc0/mtc0（rd<32），其余 NOP */
-                uint32_t f3c=(w>>6)&31u, rt=(w>>16)&31u, rd=(w>>11)&31u;
-                if(f3c==0 && rd<32){ rdd((int)rt); push_eax(); mov_imm_eax(rd); push_eax(); call_ptr(H32(jh_cop0_write)); }
-                else if(f3c==1 && rd<32){ mov_imm_eax(rd); push_eax(); call_ptr(H32(jh_cop0_read)); if(rt)wrr((int)rt); }
+            case 16: case 17: case 18: case 19: case 24: case 25: case 26: case 27: {
+                /* MIPS-I SPECIAL funct: 16/17/18/19=MFHI/MTHI/MFLO/MTLO, 24..27=MULT/MULTU/DIV/DIVU
+                   (勘误 task-043: 原 case16/17 标 COP0 实为死码—COP0 在 op16/17 外层, 内层劫持 MFHI/MTHI 静默 NOP) */
+                if(f3==16u){ b1(0xA1); b4((uint32_t)(uintptr_t)&jh_hi); if(rd) wrr(rd); }
+                else if(f3==18u){ b1(0xA1); b4((uint32_t)(uintptr_t)&jh_lo); if(rd) wrr(rd); }
+                else if(f3==17u){ rdd(rs); b1(0x89); b1(0x05); b4((uint32_t)(uintptr_t)&jh_hi); }
+                else if(f3==19u){ rdd(rs); b1(0x89); b1(0x05); b4((uint32_t)(uintptr_t)&jh_lo); }
+                else { rdd((int)rt); push_eax(); rdd(rs); push_eax();
+                       call_ptr(H32(f3==24u?jh_mult:f3==25u?jh_multu:f3==26u?jh_div:jh_divu)); }
                 vpc+=4; if(pend)goto slot_done; continue; }
-            case 18: case 19: vpc+=4; if(pend)goto slot_done; continue;  /* COP1/COP2 NOP */
             case 32: case 33: if(rd){ rdd(rs); set_edx_r((int)rt); add_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;   /* add/addu: [rs]+[rt] — 勘误: EDX 须指 rt(原 [rs]+[rs] 自加 bug) */
             case 34: case 35: if(rd){ rdd(rs); set_edx_r((int)rt); sub_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
             case 36: if(rd){ rdd(rs); set_edx_r((int)rt); and_eax_mem(); wrr(rd);} vpc+=4; if(pend)goto slot_done; continue;
@@ -268,6 +277,15 @@ static void *emit_block(uint32_t vpc0){
             else { rdd(rs); cmp_eax_imm(0); setcc_al(op==6?0x06:0x0F); b1(0xA2); b4(ST+140u); }
             if(g_dbg_emit) fprintf(stderr,"[BR] vpc=%08x vpc4=%08x si=%d si2=%08x tk=%08x nt=%08x w=%08x\n",vpc,vpc+4,si,(si<<2),tk,nt,w);
             pend=1; pend_mode=1; pend_tk=tk; pend_nt=nt; vpc+=4; continue; }
+        case 1: { uint32_t rt=(w>>16)&31u;                        /* REGIMM: bltz=0/bgez=1/bltzal=2/bgezal=3(task-043) */
+            if(rt<=3u){
+                if(pend) return NULL;
+                uint32_t tk=(vpc+4)+(uint32_t)((si<<2)), nt=vpc+8;
+                rdd(rs); cmp_eax_imm(0); setcc_al((rt==0u||rt==2u)?0x0Cu:0x0Du); b1(0xA2); b4(ST+140u);
+                if(rt>=2u){   /* AL: r[0]=(flag? vpc+8 : 0) — 链接寄存器恒为 $0(r0 写忽略, 真机同义: 副作用置 ra? MIPS BLTZAL 连到 r31) */
+                    b1(0x0F); b1(0xB6); b1(0xC0); b1(0x69); b1(0xC0); b4(nt); wrr(31); }   /* MIPS: B*ZAL 链到 $31 */
+                pend=1; pend_mode=1; pend_tk=tk; pend_nt=nt; vpc+=4; continue; }
+            return NULL; }
         case 16: case 17: { uint32_t f3c=(w>>6)&31u, rt=(w>>16)&31u, rd=(w>>11)&31u;
                 if(((w>>21)&31u)==16 && (w&63u)==0x18u){        /* R3000A RFE：块终止 pc=cop0[14] */
                     if(pend) return NULL;
@@ -360,6 +378,22 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
     for(;done<max_blocks;done++){
         if(psx_state.halted) break;
         uint32_t p=psx_state.pc, h=(p>>2)&(CSLOTS-1);
+        { static int ch=-1; if(ch<0) ch=!!getenv("H_C2HOME");   /* task-043 homebrew C2 根协议面 min 供给(docs/32) */
+          if(ch && p==0x5c4u && psx_ram){ uint32_t idx=psx_state.r[9], t=0x200u;   /* 0x200 序列表调度器(task-043 第二面) */
+            uint32_t *sl=(uint32_t*)(psx_ram+((t+idx)&0x1FFFFFu)), *sl2=(uint32_t*)(psx_ram+((t+(idx<<2))&0x1FFFFFu));
+            if(*sl==0u||*sl>0x200000u){ memcpy(psx_ram+0x40110u," à    ",8); *sl=0x40110u;
+                if(log){fprintf(log,"C2HOME tbl200 [200+%x]->0x40110 t1=%08x\n",idx,idx); fflush(log);} }
+            if(*sl2==0u||*sl2>0x200000u) *sl2=0x40110u; }
+          if(ch && p==0x600u && psx_ram){ uint32_t s=*(uint32_t*)(psx_ram+0x674u);
+            uint32_t idx=psx_state.r[9];            /* 派发块: v0=0x674; t1=cmd 偏移; t0=[v0+t1]; jr t0 */
+            uint32_t *slot=(uint32_t*)(psx_ram+((0x674u+idx)&0x1FFFFFu));
+            uint32_t *slot2=(uint32_t*)(psx_ram+((0x674u+(idx<<2))&0x1FFFFFu));
+            if(log && idx){ fprintf(log,"C2HOME visit [674+%x]=%08x [674+%x*4]=%08x v0=%08x\n",idx,*slot,*slot2,psx_state.r[2]); fflush(log); }
+            if(*slot==0u || *slot>0x200000u){
+              static const uint32_t hw[]={0x3C028008u,0x34429F00u,0x03E00008u,0x00000000u}; /* lui v0,0x8008; ori v0,0x9F00; jr ra; nop */
+              memcpy(psx_ram+0x40100u,hw,16); *slot=0x40100u; *slot2=0x40100u;
+              *(uint32_t*)(psx_ram+0x89E7Cu)=0x80089F00u;   /* root 控制块指针(ROM handler 约定) */
+              if(log){fprintf(log,"C2HOME install [674+%x]->0x40100 cb=80089F00\n",idx); fflush(log);} } } }
         { static int rh=-1, nred=0; if(rh<0) rh=!!getenv("H_ROOTHLE");
           if(rh && (p>>28)==3 && p<0x3C160000u && psx_state.r[2]==0x80000010u && nred<8){
               nred++; p=0xBFC059E0u; psx_state.pc=p; h=(p>>2)&(CSLOTS-1);   /* NewRootCmd → ROM+0x59E0 handler */
