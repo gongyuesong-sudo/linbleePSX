@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 48 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 49 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -66,7 +66,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   七道墙 `docs/33` → 设备/状态词面 `docs/35/36` → 帧槽/中断面 `docs/37/38` → C2 契约面 `docs/39-42` → H-24 契约完整化 `docs/43-45`(关门)。
   **游戏内容运行既定走 DuckStation**(`~/Applications/duckstation-x64.AppImage`)。
 
-### docs 索引(48 篇=47 编号+台账, 按阶段)
+### docs 索引(49 篇=48 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -78,13 +78,14 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | H-24 完整化 `docs/43_frame_abi`→`docs/44_tfr_bounce`→`docs/45_h24_final` | 帧 ABI 三族+8 线程栈窗/H_TFR 回灌+四路注入终证/契约全集 44cmd 定量关门判 |
 | M-4 映射 `docs/46_cmd_handlers` | 三族派发链(表基 0x200/0x874/0x674)+50/50 handler 完备性实证 |
 | M-5 归名 `docs/47_rootcmd_names` | A 表锚 14/50+形态分类+三种安装视图终判 |
+| M-6 活性 `docs/48_probe_semantics` | 金标态直跑 50 handler: 27 干净返回/23 深服务, BIOS 侧活性运行时实证 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
-- H 系列锚定 validator 序列 host7..host49(近期): host45(M-2 文档终稿), host46(Vulkan 双代硬件实证),
-  host47(帧 ABI 26 捕获+8 线程栈窗), host48(H_TFR 回灌+分发器真执行+零回归), host49(契约全集 44cmd 复算)
+- H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性)
 - harness 状态: `harness-tasks.json`(59 任务终态) + `harness-progress.txt`(SESSION-1..68)
 
 ### 发布镜像
