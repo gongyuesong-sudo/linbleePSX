@@ -109,6 +109,11 @@ void __attribute__((stdcall)) jh_swr(uint32_t a, uint32_t v){ uint32_t w=jh_lw(a
 /* 分支解析：EAX 由 setCC 预置（0/1） → 返回 taken/not-taken 之一并写入 pc */
 /* 铁律：helper 必须纯 stdcall 无任何栈姿态副作用（调试日志曾毁掉 ret $12 平衡）*/
 void __attribute__((stdcall)) jh_dbg(uint32_t tag){ fprintf(stderr,"[CB%u] pc=%08x\n",tag,psx_state.pc); fflush(stderr); }
+static int jalrz_on = 0;   /* 启动期初始化于 main 前: 见下 */
+__attribute__((constructor)) static void jalrz_init(void){ jalrz_on = getenv("H_JALRZ")?1:0; }
+void __attribute__((stdcall)) jh_jalrz(uint32_t v,uint32_t jpc){   /* jalr ra,$0 直写 ra=pc+8 毒种捕获(task-050a2) */
+    if(v<0x40u && jalrz_on>0 && jit_rc_log){ static int c=0; if(c<60){ c++;
+        fprintf(jit_rc_log,"JALRZ#%d jpc=%08x v=%08x ra=%08x sp=%08x v0=%08x t9=%08x\n",c,jpc,v,psx_state.r[31],psx_state.r[29],psx_state.r[2],psx_state.r[25]); fflush(jit_rc_log);} } }
 uint32_t __attribute__((stdcall)) __jit_next(uint32_t nt, uint32_t tk, uint32_t flag){
     psx_state.pc = flag? tk : nt; return psx_state.pc;   /* 纯选路：arg1=tk arg2=nt arg3=flag */
 }
@@ -210,8 +215,9 @@ static void *emit_block(uint32_t vpc0){
         if(pend && is_nop){ vpc+=4;
             if(g_dbg_emit) fprintf(stderr,"[TERMn] mode=%d tk=%08x nt=%08x\n",pend_mode,pend_tk,pend_nt);
             if(pend_mode==4){
-                if((pend_w&0xFC00003Fu)==0x09u){                                   /* jalr: 链接=jalr_pc+8(vpc 现=jalr+4) */
+                if((pend_w&0xFC00003Fu)==0x09u){                                   /* jalr: 链接=jalr_pc+8(vpc 现=jalr+8) */
                     uint32_t lreg=(pend_w>>11)&31u;
+                    if(jalrz_on>0 && lreg){ mov_imm_eax(vpc); push_eax(); rdd((int)pend_tk); push_eax(); call_ptr(H32(jh_jalrz)); }
                     if(lreg){ mov_imm_eax(vpc); wrr((int)lreg); }   /* nop 槽 flush 时 vpc 已=jalr+8 */
                 }
                 rdd((int)pend_tk); store_pc_eax(); ret_();
@@ -277,6 +283,8 @@ static void *emit_block(uint32_t vpc0){
         case 2: case 3: {   /* j / jal：定址跳（目标不可取指→halt）*/
             if(pend) return NULL;
             uint32_t tgt=((vpc+4)&0xF0000000u)|((w&0x3FFFFFFu)<<2);
+            if(op==3 && !(tgt&0x1FFFFFFu) && getenv("H_JALZ"))   /* jal→不可取指零区: ra=pc+8 毒种(task-050) */
+                { static int nz=0; if(jit_rc_log && nz<40){ nz++; fprintf(jit_rc_log,"JALZ#%d from=%08x delay=%08x ra=%08x v0=%08x t9=%08x\n",nz,vpc,vpc+8,psx_state.r[31],psx_state.r[2],psx_state.r[25]); fflush(jit_rc_log); } }
             if(op==3){ mov_imm_eax(vpc+8); wrr(31); }
             uint32_t dummy;
             pend=1; pend_mode= ram_fetch(tgt,&dummy)?0:2; pend_tk=tgt; pend_nt=tgt; vpc+=4; continue; }
@@ -344,7 +352,7 @@ int jit_run(uint32_t max_blocks){
         if(cc[h].vpc!=p || !cc[h].code){
             void *c=emit_block(p);
             if(g_dbg_emit) fprintf(stderr,"[EMIT] p=%08x -> %08x\n",p,(unsigned)(uintptr_t)c);
-            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op); fflush(f);} } return 2; }
+            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=jit_rc_log?jit_rc_log:devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x ra=%08x sp=%08x v0=%08x t9=%08x\n",jit_fail_pc,jit_fail_op,psx_state.r[31],psx_state.r[29],psx_state.r[2],psx_state.r[25]); fflush(f);} } return 2; }
             cc[h].vpc=p; cc[h].code=c;
         } else if(g_dbg_emit) fprintf(stderr,"[HIT] p=%08x code=%08x h=%d\n",p,(unsigned)(uintptr_t)cc[h].code,h);
         { static int step=0; if(getenv("JIT_DEBUG")&&step<300){ uint32_t *u=(uint32_t*)cc[h].code;
@@ -377,6 +385,9 @@ int emit_block_dbg_wrap(uint32_t v,uint8_t**o,uint32_t*l){ return emit_block_dbg
 
 /* ---------------- htrace 库接口（H-10b BIOS-JIT 激活） ---------------- */
 void jit_lib_flush_blocks(void){ cache_inval(); }
+void jit_flush_range(uint32_t lo,uint32_t hi,int n){   /* n: 0=phys 基址, 1=0x80000000, 2=0xBFC00000 (task-050) */
+    uint32_t base = n==1?0x80000000u:(n==2?0xBFC00000u:0u);
+    for(int i=0;i<1024;i++){ if(cc[i].code && cc[i].vpc>=base+lo && cc[i].vpc<base+hi) cc[i].code=0; } }
 uint32_t jit_lib_gpuw(void){ return g_gpuw; }
 int  jit_lib_load_rom(const uint8_t *rom_shadow){ psx_rom=rom_shadow; return jit_init(); }
 static int jit_rootcall_serve(void);
@@ -407,6 +418,7 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
             if(cg && !gdone && psx_ram){ const char*gpath=getenv("H_C2GOLD"); if(gpath[0]!='/') gpath="/home/gill/bleem/.analysis/golden/golden_c2_slice_30000_90000.bin";
                 FILE*fp=fopen(gpath,"rb");
                 gdone=1;
+
                 if(fp){ static uint32_t *scr; if(!scr) scr=malloc(0x60000);
                     size_t rd=fread(scr,1,0x60000,fp); fclose(fp); unsigned nf=0;
                     uint32_t *live=(uint32_t*)(psx_ram+0x30000);
@@ -428,7 +440,13 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
                     { const char*cs=getenv("H_C2STATE");
                       if(cs && psx_ram){ *(uint32_t*)(psx_ram+0x89e2c)=(uint32_t)strtoul(cs,0,0);
                         if(log){fprintf(log,"C2GOLD state-override [89e2c]=%08x\n",*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} } }
-                    if(log){fprintf(log,"C2GOLD statepatch applied=%u [89e2c]=%08x\n",nw,*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} } } } }
+                    if(log){fprintf(log,"C2GOLD statepatch applied=%u [89e2c]=%08x\n",nw,*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} }
+                if(getenv("H_JZSLED") && psx_ram){   /* 表改写后: RAM 0x0 ack 跳板 + 向量页定向 flush(task-050) */
+                    uint32_t s[4]={0x24020001u,0x03E00008u,0x24020001u,0x00000000u};
+                    if(!*(uint32_t*)psx_ram) memcpy(psx_ram,s,16);
+                    extern void jit_flush_range(uint32_t lo,uint32_t hi,int n);
+                    jit_flush_range(0x000u,0x440u,1); jit_flush_range(0x000u,0x440u,2); jit_flush_range(0x000u,0x440u,0);
+                    if(log){fprintf(log,"JZSLED installed+vecflush\n"); fflush(log);} } } } }
           if(ch && p==0x600u && psx_ram){ uint32_t s=*(uint32_t*)(psx_ram+0x674u);
             uint32_t idx=psx_state.r[9];            /* 派发块: v0=0x674; t1=cmd 偏移; t0=[v0+t1]; jr t0 */
             uint32_t *slot=(uint32_t*)(psx_ram+((0x674u+idx)&0x1FFFFFu));
@@ -445,7 +463,7 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
               if(log){fprintf(log,"ROOTHLE redirect->%08x (#%d)\n",p,nred); fflush(log);} } }
         { static int lrep=-1; if(lrep<0){ const char*e=getenv("H_LOOPREP"); lrep=e?atoi(e):20000; } if(p==lastrep){ if(++rep>lrep){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } } else { lastrep=p; rep=0; } }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
-        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
+        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=jit_rc_log?jit_rc_log:devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x ra=%08x sp=%08x v0=%08x t9=%08x\n",jit_fail_pc,jit_fail_op,psx_state.r[31],psx_state.r[29],psx_state.r[2],psx_state.r[25]);
                       for(uint32_t q=(nseq>8?nseq-8:0); q<nseq && q<65536;q++) fprintf(f,"  PREV[%u]=%08x\n",q,seq[q]);
                       fprintf(f,"  UNIQ-TAIL(%u):",nuq); for(uint32_t q=(nuq>12?nuq-12:0);q<nuq;q++) fprintf(f," %08x",uq[q]); fprintf(f,"\n");
 
@@ -670,7 +688,7 @@ int jit_lib_bios_call_log(uint32_t entry_pc,uint32_t budget,uint32_t *ret_v0,FIL
         uint32_t p=psx_state.pc,h=(p>>2)&(CSLOTS-1); hb[n&(65536-1)]=p; jit_cur_pc=p;
         { static int lrep=-1; if(lrep<0){ const char*e=getenv("H_LOOPREP"); lrep=e?atoi(e):20000; } if(p==lastrep){ if(++rep>lrep){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } } else { lastrep=p; rep=0; } }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
-        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
+        if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=jit_rc_log?jit_rc_log:devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x ra=%08x sp=%08x v0=%08x t9=%08x\n",jit_fail_pc,jit_fail_op,psx_state.r[31],psx_state.r[29],psx_state.r[2],psx_state.r[25]);
                       { for(int q=((int)n>8?(int)n-8:0); q<(int)n;q++) fprintf(f,"  PREV[%d]=%08x\n",q,hb[q&(65536-1)]); }
                       fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
         ((void(*)())cc[h].code)();
