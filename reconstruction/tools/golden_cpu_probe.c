@@ -36,6 +36,24 @@ int main(int argc, char** argv){
     memcpy(psx_state.r,hdr+12,128);   /* magic "GS1\0"(4B)+npc(4)+pc(4) → GPR 自 byte12 */
     psx_state.pc=pc; psx_state.halted=0; psx_state.halt_kind=0;
 
+    if(getenv("TAIL")) g_dbg_emit=1;
+    extern void* jit_dbg_lastblock(void); extern uint32_t jit_lib_gpuw_probe(void);
+    int hb = !!getenv("HB");
+    if(hb){                        /* H-17b: 第一方 homebrew EXE 装载(等价 BIOS Execute! 终态) */
+        const char* xp = getenv("HBEXE") ? getenv("HBEXE") : "host/build/hbrew.exe";
+        FILE*fe=fopen(xp,"rb"); if(!fe){printf("HBEXE open fail\n");return 2;}
+        static unsigned char ex[8192]; size_t xn=fread(ex,1,sizeof ex,fe); fclose(fe);
+        if(xn<2049){printf("HBEXE short %zu\n",xn);return 2;}
+        uint32_t pc0=*(uint32_t*)(ex+0x10), ta=*(uint32_t*)(ex+0x18), tsz=*(uint32_t*)(ex+0x1C),
+                 sa=*(uint32_t*)(ex+0x20), ssz=*(uint32_t*)(ex+0x24);
+        if(getenv("HBBASE")){ ta=0; ssz=0; ta=(uint32_t)strtoul(getenv("HBBASE"),0,16); tsz=(uint32_t)xn-2048; }
+        memcpy(psx_ram+(sa&0x1FFFFFu), ex+2048, ssz);
+        memcpy(psx_ram+(ta&0x1FFFFFu), ex+2048+ssz, tsz);
+        psx_state.pc=pc0; psx_state.r[29]=0x801FFF00u; psx_state.r[31]=0xBFC4C1B0u;
+        psx_state.halted=0; psx_state.halt_kind=0;
+        jit_lib_flush_blocks();   /* 关键: 清残留 BIOS 期块缓存(htrace/serve 装载过 0x4C000 页) */
+        printf("HB load pc0=%08x t=%08x/%u s=%08x/%u\n",pc0,ta,tsz,sa,ssz);
+    }
     int poke = !!getenv("POKE");
     if(poke){                     /* 时基注入: 设备状态字节 RAM 0x83C58=1 → 轮询环进入主循环体 */
         *(uint8_t*)(psx_ram+0x83C58u)=1u;
@@ -53,10 +71,20 @@ int main(int argc, char** argv){
     }
     uint32_t cycles=0;
     uint32_t budget=argc>2?(uint32_t)strtoul(argv[2],0,10):(inj?200000u:4000u);
-    PsxState cp = psx_state;   /* 休眠快照(TICK 前捕获) */
+
     uint32_t pages=pc&~0xFFFu; uint32_t i,serves=0,fails=0,devwalk=0,vect=0; int outside=0;
+    PsxState cp = psx_state;   /* 休眠快照: 必须在 fails=0 初始化之后(否则 cp.fails=垃圾, TICK 恢复即污染) */
+    uint32_t hbphase=0, hbbreaks=0;
     for(i=0;i<budget;i++){
-        if(jit_run(1)){ if(getenv("HLOG")) fprintf(stderr,"HALT pc=%08x hk=%u\n",psx_state.pc,psx_state.halt_kind);
+        /* 阶段推进仅在哨兵 break 停机时(见下), 不在 strcpy 中途抢 */
+        if(jit_run(1)){
+            if(hb){   /* break 停机: 程序内 break 或 ROM 哨兵 = 周期收尾 */
+                if((psx_state.pc>=0xBFC00000u && psx_state.pc<0xBFC80000u) || (psx_state.halted && psx_state.halt_kind==3)){
+                    hbbreaks++; hbphase=1;                  /* 程序自然 break / ROM 哨兵 = 正常收尾 */
+                    psx_state.halted=0; psx_state.halt_kind=0; break;
+                }
+                fails=1; break;
+            } if(getenv("HLOG")) fprintf(stderr,"HALT pc=%08x hk=%u\n",psx_state.pc,psx_state.halt_kind);
             if(getenv("TICK") && !inj && psx_state.halt_kind==2){
                 /* ROM 窗内停机=break 哨兵命中 → 一次完整唤醒周期收尾; RAM 零页停机=死模块滑行 → 单纯重导引 */
                 if(psx_state.pc>=0xBFC00000u && psx_state.pc<0xBFC80000u) cycles++;
@@ -67,9 +95,10 @@ int main(int argc, char** argv){
             else break;
         }
         uint32_t c=psx_state.pc;
-        if(getenv("TAIL")&&0){
+        if(getenv("DBLK")){ extern void* jit_dbg_lastblock(void); extern uint32_t jit_lib_gpuw_probe(void); printf("LASTBLK@%08x ptr=%p\n",c,jit_dbg_lastblock()); fflush(stdout); }
+        if(getenv("TAIL")){
             printf("P %08x",c);
-            if(getenv("TREG")) for(int q=16;q<32;q++) printf(" r%d=%08x",q,psx_state.r[q]);
+            if(getenv("TREG")) for(int q=2;q<8;q++) printf(" r%d=%08x",q,psx_state.r[q]); for(int q=16;q<32;q++) printf(" r%d=%08x",q,psx_state.r[q]);
             printf("\n");
         }
         if((c&0xF0000000u)==0x80000000u||c<0x200000u){ uint32_t k=c&0x1FFFFFu;
@@ -84,6 +113,12 @@ int main(int argc, char** argv){
                 idle=0; jit_lib_flush_blocks(); } }
             else idle=0; (void)last;
         }
+    }
+    if(hb){
+        uint32_t cnt=*(uint32_t*)(psx_ram+0x1FE000u), dst=*(uint32_t*)(psx_ram+0x1FE010u);
+        printf("GOLDEN-HB blocks=%u pc=%08x s0=%08x s1=%08x t8=%08x cnt=%u gpuw=%u dst=%08x breaks=%u phase=%u fails=%u\n",
+               i, psx_state.pc, psx_state.r[16], psx_state.r[17], psx_state.r[24], cnt, jit_lib_gpuw_probe(), dst, hbbreaks, hbphase, fails);
+        return (cnt>=2000 && jit_lib_gpuw_probe()>0 && !fails && hbphase==1)?0:1;   /* dst 串由 host30 单独断言(FULL) */
     }
     printf("GOLDEN-%s cycles=%u blocks=%u pc=%08x outside=%d halted=%u hk=%u sp=%08x serves=%u devwalk=%u vect=%u lowrd=%u fails=%u\n",
            inj?"INJ":"RUN", cycles, i, psx_state.pc, outside, psx_state.halted, psx_state.halt_kind,
