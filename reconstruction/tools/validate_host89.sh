@@ -37,7 +37,7 @@ for i in range(0x200,0x300):
 print(len(hit))")
 [ "$d" -ge 6 ] && note "D) 位引擎状态字段串 s3 头命中 $d/7" || { note "D) FAIL n=$d"; fail=1; }
 grep -q "服务分派器\|索引调用 ABI" docs/81_service_table_abi.md && grep -q "guest 侧投影" docs/81_service_table_abi.md && grep -q "未闭环" docs/81_service_table_abi.md && note "E) docs/81 锚齐(含诚实未闭环)" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "81_service_table_abi" README.md && [ "$dd" -eq 83 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "81_service_table_abi" README.md && [ "$dd" -eq 84 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "G) EXE 只读恒" || { note "G) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST89 CHECK PASS" || echo "HOST89 CHECK FAIL"
 [ $fail -eq 0 ]

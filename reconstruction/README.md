@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 83 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 84 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -84,7 +84,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   帧分发与唤醒协议只存在于宿主 x86 码——纯 guest 语境长程主运行语义上不存在,
   guest 侧可达边界已实测穷尽**。再进一步 = x86 宿主码战线(反编译原 EXE, 新战役级)。
 
-### docs 索引(83 篇=82 编号+台账, 按阶段)
+### docs 索引(84 篇=83 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -131,13 +131,14 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | X86w5 s3 真身 `docs/80_host_engine_s3` | 23 锚指令级审计**零漂移**(docs/06 金标准无腐); s1/s2=薄皮(表 0xe/0x9e); **s3(466KB/15.5万指令/SYSTEM.CNF/PSX.EXE/KERNEL.EXE)=完整宿主引擎**——A3"唤醒协议在宿主码"的宿主码即 s3; 主循环=楔6(thunk 表重建前置) |
 | X86w6 服务表 ABI `docs/81_service_table_abi` | **0x4022a4=服务分派表**(0x55459 索引 call ABI); s3 对外面=table[0]×11 头壳聚簇+37 动态; **位引擎状态块 0x2A0000-2A002A 双侧互证**; A3 低页槽=表 guest 投影(闭环); 主循环未闭环(楔7 双判据) |
 | X86w7 映射构造器+否证 `docs/82_mapbuilder_negation` | 双判据唯一交叉环=init 循环→**主循环静态 imm 原理性失明(诚实否证)**; **PSX 内存映射构造器现形**(0x1F800400/BIOS 窗/RAM 3.2MB/0x9400 池——docs/39 契约 native 代码在手); 楔8 换判据=大循环×状态块 disp 读簇 |
+| X86w8 静态封顶 `docs/83_static_ceiling` | 三判据连续否证(disp 无判别力 181/shell 环 0/可达 0); **s3 入口=0x10A4E init(块表驱动回调, 无静态被引)**; 三段式启动定型; 主循环 Win32 全走 call*reg×37 动态面——**静态方法边界落账, 主循环归动态战役(Wine 断点)** |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚), host86(二段图谱锚), host87(解包链会师锚), host88(s3 真身+零漂移锚), host89(服务表 ABI 锚), host90(映射构造器+否证锚)——注: host75 编号未用
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚), host86(二段图谱锚), host87(解包链会师锚), host88(s3 真身+零漂移锚), host89(服务表 ABI 锚), host90(映射构造器+否证锚), host91(静态封顶锚)——注: host75 编号未用
 - harness 状态: `harness-tasks.json`(92 任务全终态 79✓/13✗) + `harness-progress.txt`(SESSION-1..101); A3 终判封线审计=validate_host83(动态终态+docs=77+能力钩+A3 锚抽验+port 终跑); 历史审计=host72/63
 
 ### 发布镜像

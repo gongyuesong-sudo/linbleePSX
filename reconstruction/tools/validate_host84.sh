@@ -29,6 +29,6 @@ print('DLLS',len(imp),'NAMED',sum(len(v) for v in imp.values()))")
 echo "$b" | grep -q "DLLS 6 NAMED 71" && note "B) 导入面 6 DLL/71 命名 API 锚" || { note "B) FAIL $b"; fail=1; }
 c=$(sha256sum $E | cut -c1-8); [ "$c" = "b61ee13e" ] && note "C) EXE 只读性恒" || { note "C) FAIL"; fail=1; }
 grep -q "287,732" docs/76_x86_recon.md && grep -q "动态解析" docs/76_x86_recon.md && grep -q "楔2 定靶" docs/76_x86_recon.md && note "D) docs/76 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "76_x86_recon" README.md && [ "$dd" -eq 83 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "76_x86_recon" README.md && [ "$dd" -eq 84 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST84 CHECK PASS" || echo "HOST84 CHECK FAIL"
 [ $fail -eq 0 ]
