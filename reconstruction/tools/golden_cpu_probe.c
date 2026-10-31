@@ -10,6 +10,7 @@
 #include "mips_jit_inc.h"
 
 uint32_t jit_lib_lowrd(void);
+void jit_lib_flush_blocks(void);
 int jit_lib_serve(void);
 
 int main(int argc, char** argv){
@@ -35,6 +36,11 @@ int main(int argc, char** argv){
     memcpy(psx_state.r,hdr+12,128);   /* magic "GS1\0"(4B)+npc(4)+pc(4) → GPR 自 byte12 */
     psx_state.pc=pc; psx_state.halted=0; psx_state.halt_kind=0;
 
+    int poke = !!getenv("POKE");
+    if(poke){                     /* 时基注入: 设备状态字节 RAM 0x83C58=1 → 轮询环进入主循环体 */
+        *(uint8_t*)(psx_ram+0x83C58u)=1u;
+        printf("POKE 83C58=1\n");
+    }
     int inj = !!getenv("INJ");
     if(inj){
         uint32_t a42=0x00000000u;
@@ -45,24 +51,45 @@ int main(int argc, char** argv){
         psx_state.pc=a42;
         printf("INJ printf entry=%08x a0=%08x sp=%08x\n",a42,psx_state.r[4],psx_state.r[29]);
     }
+    uint32_t cycles=0;
     uint32_t budget=argc>2?(uint32_t)strtoul(argv[2],0,10):(inj?200000u:4000u);
+    PsxState cp = psx_state;   /* 休眠快照(TICK 前捕获) */
     uint32_t pages=pc&~0xFFFu; uint32_t i,serves=0,fails=0,devwalk=0,vect=0; int outside=0;
     for(i=0;i<budget;i++){
-        if(jit_run(1)){
+        if(jit_run(1)){ if(getenv("HLOG")) fprintf(stderr,"HALT pc=%08x hk=%u\n",psx_state.pc,psx_state.halt_kind);
+            if(getenv("TICK") && !inj && psx_state.halt_kind==2){
+                /* ROM 窗内停机=break 哨兵命中 → 一次完整唤醒周期收尾; RAM 零页停机=死模块滑行 → 单纯重导引 */
+                if(psx_state.pc>=0xBFC00000u && psx_state.pc<0xBFC80000u) cycles++;
+                psx_state=cp; psx_state.r[31]=0xBFC4C1B0u; psx_state.halted=0; psx_state.halt_kind=0; jit_lib_flush_blocks(); continue;
+            }
             if(!(psx_state.halted && psx_state.halt_kind!=2)){ fails=1; break; }
             if(getenv("H_EXNVEC")||inj){ if(jit_lib_serve()){ fails=1; break; } serves++; }
             else break;
         }
         uint32_t c=psx_state.pc;
+        if(getenv("TAIL")&&0){
+            printf("P %08x",c);
+            if(getenv("TREG")) for(int q=16;q<32;q++) printf(" r%d=%08x",q,psx_state.r[q]);
+            printf("\n");
+        }
         if((c&0xF0000000u)==0x80000000u||c<0x200000u){ uint32_t k=c&0x1FFFFFu;
             if(k>=0xDE8u&&k<0xE10u) devwalk=1;
             if(k>=0x80u&&k<0xC0u) vect=1;
         }
         if(!inj && (c&~0xFFFu)!=pages) outside++;
+        if(getenv("TICK") && !inj){     /* 宿主时基: 环回空闲页即再唤醒, 计周期 */
+            static uint64_t last=0; static int idle=0;
+            if((c&0xFFFFF000u)==0x8003D000u){ if(++idle>=100){ *(uint8_t*)(psx_ram+0x83C58u)=1u;
+                psx_state.r[31]=0xBFC4C1B0u;                   /* ra(叶函数活值)=休眠调用者(已死模块)→改写 break 哨兵, 唤醒周期干净返回宿主 */
+                idle=0; jit_lib_flush_blocks(); } }
+            else idle=0; (void)last;
+        }
     }
-    printf("GOLDEN-%s blocks=%u pc=%08x outside=%d halted=%u hk=%u sp=%08x serves=%u devwalk=%u vect=%u lowrd=%u fails=%u\n",
-           inj?"INJ":"RUN", i, psx_state.pc, outside, psx_state.halted, psx_state.halt_kind,
+    printf("GOLDEN-%s cycles=%u blocks=%u pc=%08x outside=%d halted=%u hk=%u sp=%08x serves=%u devwalk=%u vect=%u lowrd=%u fails=%u\n",
+           inj?"INJ":"RUN", cycles, i, psx_state.pc, outside, psx_state.halted, psx_state.halt_kind,
            psx_state.r[29], serves, devwalk, vect, jit_lib_lowrd(), fails);
+    
+    if(getenv("TICK")) return (cycles>=3 && !fails)?0:1;
     if(inj) return (jit_lib_lowrd()>0)?0:1;   /* 设备槽读=验收锚; fails 允许(链滑入未装区属预期) */
     return (!fails && outside==0)?0:1;
 }

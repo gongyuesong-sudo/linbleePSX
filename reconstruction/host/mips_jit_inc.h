@@ -532,3 +532,5 @@ __asm__(
 "trampoline_call:\n"
 "\tpushl %ebp\n\tmovl %esp,%ebp\n\tmovl 8(%ebp),%eax\n\tcall *%eax\n\tpopl %ebp\n\tret\n"
 ".size trampoline_call,.-trampoline_call\n");
+
+void jit_lib_flush_blocks(void){ cache_inval(); }
