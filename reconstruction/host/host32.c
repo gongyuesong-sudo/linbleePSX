@@ -19,12 +19,25 @@
 #include <unistd.h>
 
 extern void call_engine(uint32_t entry, uint32_t cb);  /* tramp32.s */
+#include "biosrom.h"                                    /* H-8a BLEEM_BIOS 接线 */
 extern void host_service_cb(void);
 void finish(int fromsignal);
 extern uint32_t svc_call(uint32_t);
 
 #define ARENA_BASE 0x2a1000u
-#define ARENA_SIZE 0x04000000u   /* 常驻 64 MB RWX：img 把 alloc 指针当 int 存，高地址会溢出 */
+#define ARENA_SIZE 0x04000000u   /* seg0 常驻 64 MB RWX：img 把 alloc 指针当 int 存，高地址会溢出 */
+/* H-9a seg1 柔性扩展段（内核 7.0 大 MAP_FIXED 触雷 → 禁 FIXED，成功即启用）*/
+static const uint32_t SEG1_BASE=0x10000000u;
+static uint32_t seg1_cap=0, arena_used=0;
+static int32_t arena_take(uint32_t sz){
+    uint32_t tot=ARENA_SIZE+seg1_cap;
+    if(arena_used+sz>tot) return -1;
+    int32_t base=(arena_used<ARENA_SIZE)?(int32_t)(ARENA_BASE+arena_used):(int32_t)(SEG1_BASE+(arena_used-ARENA_SIZE));
+    arena_used+=sz; return base;
+}
+static int arena_contains(uint32_t a){
+    return (a>=ARENA_BASE&&a<ARENA_BASE+ARENA_SIZE)||(seg1_cap&&a>=SEG1_BASE&&a<SEG1_BASE+seg1_cap);
+}
 
 uint32_t arena_bump = ARENA_BASE;
 static uint32_t cb_snap[0x1000];
@@ -42,6 +55,11 @@ uint32_t bios_map_cb_c(void){
     void*m=mmap((void*)0xBFC00000u,0x80000,PROT_READ|PROT_WRITE|PROT_EXEC,
                 MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(m!=(void*)0xBFC00000u){ printf("[host] bios map fail\n"); return bios_region; }
+    if(g_bios_rom){
+        memcpy(m,(void*)(uintptr_t)(bios_region+0xC0000u),0x80000);
+        printf("[host] bios mapped @0xBFC00000 (ROM loaded sha256=%s)\n", g_bios_hex);
+        return 0xBFC00000u;
+    }
     memset(m,0xC3,0x80000);   /* BIOS stub：ret 滑道（H-5 换 PSX.EXE JIT 码）*/
     printf("[host] bios mapped @0xBFC00000 (ret-sled)\n");
     return 0xBFC00000u;   /* 引擎契约：返回 PSX BIOS 基址 */
@@ -58,12 +76,10 @@ uint32_t __attribute__((stdcall)) sVA(void *addr, uint32_t size, uint32_t type, 
     if(size>0x40000000u||size==0) size=0x10000;           /* flags 误入时兜底 */
     size = (size + 0xffff) & ~0xffffu;
     if(!size) size = 0x10000;
-    uint32_t r = arena_bump;
-    arena_bump += size;
-    if(arena_bump >= ARENA_BASE + ARENA_SIZE){ printf("[host] arena exhausted\n"); return (uint32_t)-1; }
+    { int32_t r=arena_take(size);
+      if(r<0){ printf("[host] arena exhausted\n"); return (uint32_t)-1; } arena_bump=r+size;
     if(nalloc<64) allocs[nalloc++]=r;
-    printf("[host] VA size=%#x -> %#x\n", size, r);
-    return r;
+    printf("[host] VA size=%#x -> %#x\n", size, (uint32_t)r); return (uint32_t)r; }
 }
 
 static uint32_t*cb_g; static int nalloc_g; static int nrec=0;
@@ -151,6 +167,11 @@ int main(int argc,char**argv){
     fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
     if(!mmap((void*)ARENA_BASE, ARENA_SIZE, PROT_READ|PROT_WRITE|PROT_EXEC,
              MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0)){printf("[host] arena fail\n");return 2;}
+    { const char*am=getenv("H_ARENA_MB");                 /* H-9a: seg1（H_ARENA_MB=总容量，含 seg0 64MB）*/
+      if(am){ uint32_t mb=strtoul(am,0,0); if(mb>64u){ uint32_t extra=(mb-64u)*0x100000u; if(extra>0x30000000u) extra=0x30000000u;
+        void*q=mmap((void*)SEG1_BASE,extra,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if(q==(void*)SEG1_BASE) seg1_cap=extra;
+        printf("[host] seg1=%p cap=%#x\n",q,seg1_cap); } } }
     /* arena 页预置可执行存根：0xC3 ret / 0xC2 10 00 ret $16 —— 引擎把 VA 结果
      * 当函数指针调用时安全返回 0（H-2 探针实证 pc=e9353000 = 数据被当代码）*/
     memset((void*)ARENA_BASE, 0xC3, ARENA_SIZE);
@@ -182,6 +203,9 @@ int main(int argc,char**argv){
     else {
         /* 假 BIOS 头：PC=0xBFC00000 区可读 */
         uint32_t*b=(uint32_t*)(uintptr_t)bios_region; b[0]=0x40000000u; /* 占位指令 */
+        { int r=bios_rom_load();                   /* H-8a：BLEEM_BIOS 硬校验 */
+          if(r<0) return 6;
+          if(r>0){ bios_rom_place(bios_region, 0xC0000u); bios_rom_register("host/build/bios_sha256.txt"); } }
         void stub_fn(void); /* noop */
     }
 
@@ -213,7 +237,7 @@ void finish(int fromsignal){
     int slots_ok=0;
     for(int i=0;i<4;i++){
         uint32_t a=cb[0x34/4+i];
-        if(a>=ARENA_BASE && a<ARENA_BASE+ARENA_SIZE){
+        if(arena_contains(a)){
             slots_ok++;
             *(volatile uint32_t*)(uintptr_t)a=0x51455250u;      /* 写 */
             if(*(volatile uint32_t*)(uintptr_t)a!=0x51455250u) slots_ok--;

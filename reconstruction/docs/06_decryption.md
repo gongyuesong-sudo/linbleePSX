@@ -62,10 +62,14 @@ bit0=1 ─┬─ bit0=0 ─┬─ bit0=0: 3 字节匹配（9 位直取 或 get8+
 
 ### 模块布局与装载
 - 模块 = `{dword 数据表偏移, 代码..., 数据表}`；运行时入口 = 流内容 +4
-- 装载器（明文桩 0x5546D）：汇总尺寸 → 两级 VirtualAlloc(RW) → 顺序解压 →
-  重定位链（bit1 流：`add esi,[esi-2]` 指向流前负偏移处的重定位表）→ 指针表
-  （img+0x10068 起 {槽索引, 偏移/值} 对）填入 alloc 绝对地址 → 引擎表把 API 桩
-  `mov eax,0x4022a4; add eax,delta` 指向真实 Win32 导入（GetVersionExA 起 79 项，0x4022a4+idx*4）
+- 装载器（明文桩）：汇总尺寸 → 两级 VirtualAlloc(RW) → 顺序解压 →
+  重定位 = `FUN_000553CA` 块表驱动（16 B/条 @VIEW+0xfa0c：`test [reg+0x34],-1`
+  自愈跳过、`add eax,[ebp+0x30]` delta、RAND-fold XOR 校验 vs `blk[+0xc]`）。
+  **（2026-10-25 SESSION-6 证伪更正：不存在 `add esi,[esi-2]` 流前重定位表，
+  也不存在 img+0x10068 指针表——该区域为指令码 `8b 01 01 00`。）**
+- 引擎 API 派发（详见 docs/08）：`[0x4022a4]` 槽 0 直址 11 处（VirtualAlloc）+
+  `call [eax+disp8]` 表调用 91 处；EAX = 装载器按 0x4011e0 名称池（0x4f=79 项，
+  ShellExecuteA/KERNEL32.DLL/CloseHandle/CreateFileA…）解析后传入的指针数组。
 
 ## 引擎身份证据（解密后 154 个函数 / 523 条字符串）
 - `DDRAW.DLL / DSOUND.DLL / :\\PSX.EXE / bleem! Controller Settings / FrameSkip / %d Hz / %dx%d %d-bit`

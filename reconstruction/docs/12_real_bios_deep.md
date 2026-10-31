@@ -1,14 +1,14 @@
 # 12 — H-8b 实盘 BIOS 深执行观测：首次越过 0x4002b7（SESSION-19/20）
 
-ROM：用户提供合法自有 SCPH1001（524288B，
+ROM：`/home/gill/bleem/psxbios/SCPH1001.BIN`（用户提供合法自有；524288B，
 SHA-256 `71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3`，
-登记于 `host/build/bios_sha256.txt`（本地生成），与 htrace.log `BIOS-LOADED real ROM @0xBFC00000` 双向印证）。
-完整 trace：`host/build/htrace_deep.log`（190,409 行，本地生成，不分发）。validator：`tools/validate_host11.sh` PASS rc=0。
+登记于 `host/build/bios_sha256.txt`，与 htrace.log `BIOS-LOADED real ROM @0xBFC00000` 双向印证）。
+完整 trace：`host/build/htrace_deep.log`（190,409 行）。validator：`tools/validate_host11.sh` PASS rc=0。
 
 复现：
 ```bash
 gcc -m32 -O0 -g -no-pie -o host/build/htrace host/htrace.c host/tramp32.s
-H_SLED_CAP=3000 BLEEM_BIOS=/path/to/own/SCPH1001.BIN \
+H_SLED_CAP=3000 BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN \
   timeout 280 ./host/build/htrace decrypted/stream_10a4c_L71cbf_relocated.bin 0x400000 0x472000
 ```
 

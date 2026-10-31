@@ -80,3 +80,33 @@
 | `tools/native_unpack/unpack_lib.c` | 逐位精确解压器（blk 流 + 内层资源共用）|
 | `tools/apply_reloc.py` | 静态重定位器（可重跑）|
 | `port/src/vk_host.c` | 现有 Vulkan 显示层（`vk_open/vk_push/vk_alive`）|
+
+## 七、H-4 定案与 H-5 战略转向（SESSION-13）
+
+**H-4 实证结论（validate_host4.sh）**：
+- init 阶段（`img+0x4..0x2b7`）为纯 x86-32 原生代码，宿主服务协议齐备后**完整走完**；cb 句柄/窗口链（`+0x24/0x28/0x2c` scratch、`+0x34..+0x60` 分配与 BIOS 窗）全部写满
+- 引擎推进到 **BIOS 复位向量边界 `0xBFC00000`** 后跳转执行——该页内容 = **bleem 的 PSX BIOS x86-JIT 机器码**（历史外部文件 `PSX.EXE` 的职责，字符串 `":\PSX.EXE"` 即此）
+
+**H-5 战略转向（关键洞察）**：
+- 引擎镜像内 **172 张调度表（img+0x5AC4C，步长 16）= PSX 指令 → x86 JIT 例程偏移表**——`stream_10a4c_L71cbf.bin` 实为 **bleem 引擎的自解压载荷**（含内层同族 RCR 位流解压器，运行时解出 JIT 体与 BIOS-JIT 到分配块）
+- 因此端口路线收敛为：**原生 ELF 宿主 + 运行时自解压**：
+  1. 宿主提供 cb 控制块 + 服务回调（已就绪，host32.c）
+  2. 引擎运行时解出自身深层模块（JIT/BIOS-CPU/PSX 设备驱动）
+  3. 解压目标 = cb 交付的句柄块（`+0x38..+0x60`）；BIOS 窗（`+0x44..+0x5c`）= 8MB 分配内 PSX 内存镜像
+- 剩余依赖：仅**外部用户 BIOS ROM（512KB，合法自有）**——引擎 JIT 模板与全部模拟代码都在载荷内
+
+### 7.1 修正（SESSION-14，blocks.txt diff 实证）
+
+- **init 阶段引擎不写任何分配块**（控制块 pre/post diff = 0 字节）；"非零内容"系 arena C3 滑道填充假象
+- 引擎到达 BIOS 复位向量后停在 `0xBFC00000` ret-sled：**BIOS-JIT 代码页生成需要真实 BIOS ROM 输入**（历史 `PSX.EXE` 即预生成 BIOS-JIT 工件）
+- **H-5 修订路径**：
+  1. 宿主加载用户 BIOS ROM（512KB，`BLEEM_BIOS` 环境变量），放入 cb+0x44 BIOS 窗块
+  2. 引擎对 BIOS 页设 RX 保护（VirtualProtect）+ 以 `call [alloc]` 向块首跳入 → **宿主拦截 = BIOS-JIT 编译器入口**：扫描 BIOS MIPS 入口链，按 img+0x5AC4C 的 172 张 JIT 模板生成 x86 代码到该块
+  3. 生成完成后 BIOS 页 EXEC 放行，引擎正常执行 BIOS-JIT → 进入 PSX 模拟主循环
+
+### 7.2 H-5b BIOS 输入观测（SESSION-15）
+
+- 全盘无 BIOS ROM（`find ~ SCPH*/PSX.EXE/*bios*.bin` 零命中；psgame 仅 1 个 PBP）。**真实 BIOS-JIT 路线要求用户合法提供 512KB ROM（`BLEEM_BIOS`）——法律与技术双重必要，不可伪造**
+- **HLE stub 可行性已证**：BIOS 向量 `0xBFC00000` 置 ret-sled（返回 EAX=0）后，引擎**不陷入错误循环**，继续执行至 **162,658 条 trace 记录**（其中引擎地址段 `0x400000-0x4002b7` 指令 275 条，其余为宿主恢复路径与 arena/宿主段记录）——PSX 状态机在无 BIOS 内容时仍完成大量初始化写入（arena 深区 `0x40d11000` 等）；**深度数字主要反映 stub 容忍下的持续运转，而非纯引擎进度**
+- 生产宿主 stub-sled 三区覆盖（BIOS 向量/低位伪 BIOS/arena·memtable call）+ cap 保护，init 干净返回（signal≤1）
+- 引擎在 htrace 下 fatal 点 `eip=080495fe` = htrace 自身 C 地址——**引擎把宿主函数地址当代码跳**（宿主返回栈暴露给引擎；诊断工具现象，非引擎缺陷；生产 handler 已用栈扫描过滤）

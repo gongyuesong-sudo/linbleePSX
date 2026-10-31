@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 fail(){ echo "FAIL: $*"; exit 1; }
 
 timeout 60 ./host/build/bleem_host decrypted/stream_10a4c_L71cbf_relocated.bin > host/build/host_run.txt 2>&1 || true
-grep -Eq 'H1 PASS (signal=[01])' host/build/host_run.txt || fail "host init not clean"   # signal=0(round-1 clean)或1(round-2 init+BIOS边界)均可
+grep -Eq 'H1 PASS \(signal=[01]\)' host/build/host_run.txt || fail "host init not clean"   # signal=0(round-1 clean)或1(round-2 init+BIOS边界)均可
 
 test -s host/build/htrace.log || fail "htrace.log empty"
 grep -q 'LEFT engine range at bfc00000' host/build/htrace.log || fail "BIOS-boundary jump (0xbfc00000) not reached"

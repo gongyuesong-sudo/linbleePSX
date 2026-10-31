@@ -1,7 +1,7 @@
 # 11 — H-7 静态结构测绘：img 布局、槽偏移表几何与 172 记录区（SESSION-18）
 
 复现：`python3 tools/analyze_jit_tables.py`（validator：`tools/validate_host8.sh` / `tools/validate_host9.sh`）。
-输入金标准：本地解压器产物 `stream_10a4c_L71cbf_relocated.bin`（0x71CBF，加载基址 0x400000；版权工件不随本仓库分发，需自行按 docs/06 复现）。
+输入金标准：`decrypted/stream_10a4c_L71cbf_relocated.bin`（0x71CBF，加载基址 0x400000）。
 
 ## 一、img 布局总表（实测）
 

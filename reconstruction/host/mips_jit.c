@@ -87,7 +87,14 @@ static void watch_store(uint32_t a,uint32_t v){ static int done; static uint32_t
 void __attribute__((stdcall)) jh_sw(uint32_t a, uint32_t v){ watch_store(a,v); watch_store(phys(a),v);
     { static int n; if(getenv("H_SWTRACE")&&((a==0x80050000u||a==0x800507fcu||a==0x80040038u)&&n<10||(v&3&&(v>>26)==0x2Fu)&&n<26)){n++; if(jit_rc_log){fprintf(jit_rc_log,"SWTX #%d a=%08x v=%08x pc=%08x\n",n,a,v,jit_cur_pc); fflush(jit_rc_log);} } }
     if((a&0xFFFF0000u)==0xFFFE0000u){ exvbd[(a&0xFFF)>>2]=v; devlog("HW",a,v); return; }
-    if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; if(o==0x1810)g_gpuw++; devlog("WR",a,v); return; } a=phys(a);
+    if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; if(o==0x1810)g_gpuw++;
+        { static int d2=-1; if(d2<0) d2=!!getenv("H_DEVRST2");
+          if(d2 && o>=0x1080 && o<=0x10FF && (o&0xF)==0xC && (v&0x01000000u)){   /* CHCR.Trigger→自清+Finished(task-049) */
+            uint32_t ch=(o-0x1080)>>4;
+            dev_regs[o>>2]=(v&~0x01000000u)|0x02000000u;
+            dev_regs[(0x1088+ch*0x10)>>2]=0u;                                    /* BC=0 传输完成 */
+            devlog("WR",a,v); return; } }
+        devlog("WR",a,v); return; } a=phys(a);
     if(g_vecprot && a>=0x80u && a<0xC0u && psx_ram && v!=0u){ *(uint32_t*)(psx_ram+0x9300u+(a&0x3Cu))=v; watch_store(a,v); return; }  /* 向量页写保护(HLE) */
     if(a+4<=0x200000u&&psx_ram) *(uint32_t*)(psx_ram+a)=v; }
 uint32_t __attribute__((stdcall)) jh_lb(uint32_t a){ return (jh_lw(a&~3u)>>(8*(a&3)))&0xff; }        /* 有/无符号同低字节，lb 符号扩展在调用点做 */
