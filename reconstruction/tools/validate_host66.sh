@@ -30,6 +30,6 @@ n=$(grep -c "EMITFAIL pc=0000010c" /tmp/h66_lc.txt); [ "$n" -ge 200 ] && note "C
 b=$(FWDLIST=/tmp/h66_c.txt FWDSERVE=1 H_IRQTICK=1 timeout 120 ./host/build/fwd_test 2>&1 | grep "^FWD vec")
 echo "$b" | grep -q "blocks=4157 haltpc=000000b0" && note "D) 无 SLOT 基线逐字不变(假阳性净)" || { note "D) FAIL $b"; fail=1; }
 grep -q "被实验否证" docs/61_slot_falsified.md && grep -q "六类全试毕" docs/61_slot_falsified.md && grep -q "H-26 终判封线" docs/61_slot_falsified.md && note "E) docs/61 锚齐" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "61_slot_falsified" README.md && [ "$d" -eq 65 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "61_slot_falsified" README.md && [ "$d" -eq 66 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST66 CHECK PASS" || echo "HOST66 CHECK FAIL"
 [ $fail -eq 0 ]

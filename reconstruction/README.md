@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 65 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 66 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -71,7 +71,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   `H_RAFIX` 出口钩使 0x19 调度器/0x3d 打印族**孤跑首次转化 rc=0**。批次态剩余=真线程运行期构建(重写级, 不在本仓库范围);
   全部能力带回归门沉淀(host49-62)。
 
-### docs 索引(65 篇=64 编号+台账, 按阶段)
+### docs 索引(66 篇=65 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -100,13 +100,14 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | H-27w1 真装 `docs/62_devreal_chain` | 设备真装四段链(MASK 总根因/写清/事件流/0x1F801040-4F 握手): 0x3d 死墙→16M 块活循环真执行; 楔2=CDROM 数据流 |
 | H-27w2 会师 `docs/63_timer_lifecycle` | Timer 时基真装(0x1120 热点 499k): 0x3d 生命周期全景闭环, 设备面完备, 与 H-26 同一边界会师(只剩线程+事件源) |
 | H-27w3 否证 `docs/64_wedge3_falsified` | 状态机/最小 create 集双否证: 设备面出尽, 缺口唯一化=金标准反推创建参数(周级); 三出口交裁决 |
+| H-27w3A 重定义 `docs/65_c2_green_thread` | magic 全源 0 命中否证 + **C2 绿色线程发现**(双份工作区/哨兵/字节码帧): "线程"非 BIOS 线程, 缺口重定义=C2 VM 实装; docs/54-56 措辞勘正 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚)
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚)
 - harness 状态: `harness-tasks.json`(73 任务全终态 60✓/13✗) + `harness-progress.txt`(SESSION-1..82); 封账审计=validate_host63(JSON/日志一致+终态完备+全量绿)
 
 ### 发布镜像
