@@ -15,6 +15,15 @@
 
 extern void call_engine(uint32_t entry, uint32_t cb);
 #include "biosrom.h"
+/* H-10b mips_jit 库接口（弱符号：旧构建行不链 mips_jit.c 时自动降级为无 JIT）*/
+#pragma weak jit_lib_load_rom
+#pragma weak jit_lib_trace_boot
+#pragma weak jit_lib_bios_call
+#pragma weak jit_lib_bios_call2
+int jit_lib_load_rom(const unsigned char*rom_shadow);
+int jit_lib_bios_call2(unsigned int e,unsigned int b,unsigned int*v0,unsigned int*kind,unsigned int*endpc);
+int jit_lib_trace_boot(FILE*log,unsigned int entry,unsigned int max_blocks,unsigned char*win,unsigned int win_base,int backfill);
+int jit_lib_bios_call(unsigned int entry_pc,unsigned int budget,unsigned int*ret_v0);
 static FILE*logf;
 static uint32_t bios_lo=0;
 uint32_t bios_map_cb_c(void){
@@ -24,6 +33,15 @@ uint32_t bios_map_cb_c(void){
         if(g_bios_rom){
             memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000);   /* 源区=512K，base+0↔窗 */
             if(logf){ fprintf(logf,"BIOS-LOADED real ROM @0xBFC00000 sha256=%s\n",g_bios_hex); fflush(logf); }
+            /* H-10b：引擎跳入窗之前——宿主 JIT 预热引导链并把生成码回填窗（E9 跳板）*/
+            if(getenv("H_BIOSJIT") && jit_lib_load_rom && jit_lib_trace_boot){
+                if(!jit_lib_load_rom((const unsigned char*)bios_lo)){
+                    if(logf){ fprintf(logf,"BIOS-JIT-WARM entry=BFC00000\n"); fflush(logf); }
+                    jit_lib_trace_boot(logf?logf:stderr,0xBFC00000u,
+                        (unsigned)(getenv("H_JIT_BUDGET")?atoi(getenv("H_JIT_BUDGET")):400),
+                        (unsigned char*)0xBFC00000u,0xBFC00000u,1);
+                } else if(logf){ fprintf(logf,"BIOS-JIT-WARM init-fail\n"); fflush(logf); }
+            }
             return 0xBFC00000u;
         }
         memcpy((void*)0xBFC00000u,(void*)bios_lo,0x80000); return 0xBFC00000u;
@@ -31,6 +49,19 @@ uint32_t bios_map_cb_c(void){
     return 0xBFC00000u;
 }
 uint32_t arena_bump=0x2a1000;
+/* H-9a 双段 arena：seg0=64MB @0x2a1000（0xC3 滑地）；seg1=柔性高位扩展（内核 7.0 大 MAP_FIXED 触雷，禁 FIXED）*/
+static const uint32_t SEG1_BASE=0x10000000u;
+static uint32_t seg1_cap=0;                       /* 字节，0=无扩展段 */
+static uint32_t arena_used=0;
+static int32_t arena_take(uint32_t sz){           /* 记账分配；-1=耗尽 */
+    uint32_t tot=0x04000000u+seg1_cap;
+    if(arena_used+sz>tot) return -1;
+    int32_t base=(arena_used<0x04000000u)?(int32_t)(0x2a1000u+arena_used):(int32_t)(SEG1_BASE+(arena_used-0x04000000u));
+    arena_used+=sz; return base;
+}
+static int arena_contains(uint32_t a){
+    return (a>=0x2a1000u&&a<0x2a1000u+0x04000000u)||(seg1_cap&&a>=SEG1_BASE&&a<SEG1_BASE+seg1_cap);
+}
 static int bios_hits=0;
 static uint32_t allocs[64];static uint32_t alloc_sz[64];static int nalloc;
 static uint8_t pre_copy[0x40000];
@@ -74,17 +105,17 @@ uint32_t sVA_impl(void*addr,uint32_t size,uint32_t type,uint32_t prot){
     (void)type;
     if(size>0x40000000u||size==0) size=0x10000;
     size=(size+0xffff)&~0xffffu; if(!size) size=0x10000;
-    uint32_t r=arena_bump; arena_bump+=size;
-    if(arena_bump>=0x2a1000+0x04000000) return (uint32_t)-1;
-    if(nalloc<64){allocs[nalloc]=r; alloc_sz[nalloc]=size; nalloc++;}
-    fprintf(stderr,"[VA %#x -> %#x]\n",size,r);
-    return r;
+    { int32_t r=arena_take(size); if(r<0) return (uint32_t)-1; arena_bump=(uint32_t)r+size;
+      if(nalloc<64){allocs[nalloc]=(uint32_t)r; alloc_sz[nalloc]=size; nalloc++;}
+      fprintf(stderr,"[VA %#x -> %#x]\n",size,(uint32_t)r);
+      return (uint32_t)r; }
 }
 uint32_t __attribute__((stdcall)) sVA(void*a,uint32_t sz,uint32_t t,uint32_t p){return sVA_impl(a,sz,t,p);}
 
 static uint8_t *IMG;
 static volatile int tracing=0, range_lo=0x400004, range_hi=0x400300;
 static volatile uint32_t last_img_eip=0;   /* H-8b：最后一次 img 内 trap 的 eip（跳转来源指令）*/
+static volatile uint32_t bios_max_off=0;   /* H-9a：观测到的最大 ROM 偏移 */
 static uint32_t bios_resume(ucontext_t*u,int relaxed){
     uint32_t eip=(uint32_t)u->uc_mcontext.gregs[REG_EIP];
     uint32_t esp=(uint32_t)u->uc_mcontext.gregs[REG_ESP];
@@ -125,7 +156,28 @@ static void ontrap(int sig,siginfo_t*si,void*uc){
     else if(g_bios_rom && eip>=0xBFC00000u && eip<0xBFC80000u){
         uint32_t r=bios_resume(u,1);                       /* H-8b：BIOS 入口早期捕获（MIPS 不滑成 x86）*/
         if(r){ bios_hits++;
+            if(getenv("H_BIOSJIT") && jit_lib_bios_call2){
+                uint32_t v0=0,kind=0,endpc=0; int nb=jit_lib_bios_call2(eip,400,&v0,&kind,&endpc);
+                fprintf(logf,"BIOS-JIT-CALL #%d entry=%08x blocks=%d kind=%u endpc=%08x v0=%08x\n",bios_hits,eip,nb,kind,endpc,v0); fflush(logf);
+            }
             fprintf(logf,"BIOS-MIPS-ENTRY #%d from %08x -> %08x\n",bios_hits,eip,r); fflush(logf);
+            static int cap=-1; if(cap<0){ const char*c=getenv("H_SLED_CAP"); cap=c?atoi(c):40; }
+            if(bios_hits>cap){ fprintf(logf,"VERDICT: engine BIOS-CALL LOOP — PSX exec requires JIT/interpreter at BIOS vector\n"); fprintf(logf,"BIOS-MAX-OFF %08x\n",bios_max_off); dump_blocks(); fflush(logf); fclose(logf); _exit(0); }
+            return; }
+        fprintf(logf,"LEFT engine range at %08x\n",eip); fflush(logf);
+    }
+    else if(g_bios_rom && eip<0x80000u && eip>=0x40u){
+        /* H-9a ROM-offset 约定：深段弹出的是 ROM 内偏移（相对 BIOS 基）→ 重映射进窗，走 MIPS 捕获路 */
+        uint32_t we=0xBFC00000u+eip;
+        gr[REG_EIP]=we;
+        uint32_t r=bios_resume(u,1);
+        if(r){ bios_hits++;
+            if(getenv("H_BIOSJIT") && jit_lib_bios_call2){
+                uint32_t v0=0,kind=0,endpc=0; int nb=jit_lib_bios_call2(0xBFC00000u+eip,400,&v0,&kind,&endpc);
+                fprintf(logf,"BIOS-JIT-CALL #%d entry=%08x(off %08x) blocks=%d kind=%u endpc=%08x\n",bios_hits,0xBFC00000u+eip,eip,nb,kind,endpc); fflush(logf);
+            }
+            if(eip>bios_max_off) bios_max_off=eip;
+            fprintf(logf,"BIOS-MIPS-ENTRY #%d from %08x (ROM off) -> %08x\n",bios_hits,eip,r); fflush(logf);
             static int cap=-1; if(cap<0){ const char*c=getenv("H_SLED_CAP"); cap=c?atoi(c):40; }
             if(bios_hits>cap){ fprintf(logf,"VERDICT: engine BIOS-CALL LOOP — PSX exec requires JIT/interpreter at BIOS vector\n"); dump_blocks(); fflush(logf); fclose(logf); _exit(0); }
             return; }
@@ -164,7 +216,7 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
         u->uc_mcontext.gregs[REG_EFL]|=0x100;
         return;   /* 继续跑（handler 返回即恢复） */
     }
-    if((eip>=0x2a1000 && eip<0x2e100000) || eip==0x400000 || eip==0x400004){
+    if(arena_contains(eip) || eip==0x400000 || eip==0x400004){   /* H-9a：seg1 零页调用同语义 */
         /* call 进 arena/memtable/img 头（ROM 入口期望区）：返回 0 保命继续 */
         uint32_t *st=(uint32_t*)(uintptr_t)esp; int k=0; uint32_t ret=0;
         while(k<24){ uint32_t c=st[k]; if(c>=0x400010&&c<0x472000){ ret=c; break; } k++; }
@@ -192,11 +244,11 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
             else if(eax_in==0x400004u || eax_in==0x400000u){ r0=eax_in; }  /* 真实函数指针：原样返回 */
             else if(eax_in==0x400004u || eax_in==0x400000u){ r0=eax_in; }  /* 真实函数指针：原样返回 */
             else { uint32_t sz=(eax_in+0xffff)&~0xffffu; if(!sz)sz=0x10000;
-                   r0=arena_bump; arena_bump+=sz;
-                   if(arena_bump>=0x2a1000+0x04000000){ r0=(uint32_t)-1; arena_bump-=sz; } }
+                   { int32_t r=arena_take(sz); r0=(r<0)?(uint32_t)-1:(uint32_t)r; if(r>=0) arena_bump=r+sz; } }
             u->uc_mcontext.gregs[REG_ESP]=esp+4*(k+1);
             u->uc_mcontext.gregs[REG_EAX]=r0;
             u->uc_mcontext.gregs[REG_EIP]=ret;
+            u->uc_mcontext.gregs[REG_EDI]=(uint32_t)(uintptr_t)cb_g;   /* H-9a：宿主 C 函数污染 EDI——尾派发约定 EDI=cb 必须保持 */
             recovered++;
             if(recovered<=160) fprintf(logf,"RECOVER-SVC #%d in=%08x out=%08x ret=%08x\n",recovered,eax_in,r0,ret);
             fflush(logf);
@@ -257,7 +309,7 @@ static void onsegv(int sig,siginfo_t*si,void*uc){
 
 int main(int argc,char**argv){
     setvbuf(stdout,NULL,_IONBF,0);
-    logf=fopen("host/build/htrace.log","w"); if(!logf) logf=fopen("htrace.log","w");
+    logf=fopen(getenv("HTRACE_LOG")?getenv("HTRACE_LOG"):"host/build/htrace.log","w"); if(!logf) logf=fopen("htrace.log","w");
     if(argc>2) range_lo=strtoul(argv[2],0,0);
     if(argc>3) range_hi=strtoul(argv[3],0,0);
     fprintf(logf,"RANGE %08x..%08x\n",range_lo,range_hi);
@@ -265,7 +317,13 @@ int main(int argc,char**argv){
     FILE*f=fopen(imgp,"rb");if(!f)return 1;
     fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);
     mmap((void*)0x2a1000,0x04000000,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
-    memset((void*)0x2a1000,0xC3,0x04000000);   /* arena 页 = ret 滑地（与生产一致）*/
+    memset((void*)0x2a1000,0xC3,0x04000000);   /* arena seg0 = ret 滑地（与生产一致）*/
+    { const char*am=getenv("H_ARENA_MB");       /* H-9a: seg1 柔性扩展（不碰 64MB..libc 触雷区，MAP_FIXED 禁用） */
+      if(am){ uint32_t extra=(uint32_t)atoi(am)*0x100000u; if(extra>64u){ extra-=64u;
+        if(extra>0x30000000u) extra=0x30000000u;                       /* seg1 封顶 768MB：base+cap<0x40000000 */
+        void*q=mmap((void*)SEG1_BASE,extra,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if(q!=(void*)-1 && q) seg1_cap=(q==(void*)SEG1_BASE)?extra:0;   /* 内核挪址则保守禁用扩展 */
+        fprintf(stderr,"[host] seg1=%p cap=%x\n",q,seg1_cap); } } }
     memset((void*)0x2a1000,0xC3,0x04000000);
     void*v=mmap((void*)0x400000,12u<<20,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
     if(v!=(void*)0x400000)return 3;
@@ -296,6 +354,7 @@ int main(int argc,char**argv){
     if(sigsetjmp(die_env,1)==0){ call_engine(0x400004u,(uint32_t)(uintptr_t)cb); }
     else { fprintf(logf,"[htrace] fatal-recover: dump blocks and report\n"); }
     fflush(logf); dump_blocks();
+    { fprintf(logf,"BIOS-MAX-OFF %08x\n",bios_max_off); }
     fprintf(logf,"returned\n");
     { FILE*df=fopen("host/build/cb_diff_htrace.txt","w");
       if(df){ for(int i=0;i<0x1000;i++) if(cb[i]!=cb_snap[i]&&cb[i]) fprintf(df,"+%04x=%08x\n",i*4,cb[i]); fclose(df);} }

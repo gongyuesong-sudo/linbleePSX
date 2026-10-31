@@ -39,6 +39,11 @@ int main(int argc, char** argv){
     if(getenv("TAIL")) g_dbg_emit=1;
     extern void* jit_dbg_lastblock(void); extern uint32_t jit_lib_gpuw_probe(void);
     int hb = !!getenv("HB");
+    if(getenv("CD")){                    /* H-18a: CDHLE C2 体独立直调(命令环+首扇区读回, docs/29) */
+        extern void hlecd_install_pub(void); hlecd_install_pub();
+        psx_state.pc=0x80040000u; psx_state.r[31]=0xBFC4C1B0u; psx_state.r[7]=0x80041000u;
+        psx_state.halted=0; psx_state.halt_kind=0;
+    }
     if(hb){                        /* H-17b: 第一方 homebrew EXE 装载(等价 BIOS Execute! 终态) */
         const char* xp = getenv("HBEXE") ? getenv("HBEXE") : "host/build/hbrew.exe";
         FILE*fe=fopen(xp,"rb"); if(!fe){printf("HBEXE open fail\n");return 2;}
@@ -124,6 +129,9 @@ int main(int argc, char** argv){
            inj?"INJ":"RUN", cycles, i, psx_state.pc, outside, psx_state.halted, psx_state.halt_kind,
            psx_state.r[29], serves, devwalk, vect, jit_lib_lowrd(), fails);
     
+    if(getenv("CD")){ extern unsigned char* jit_lib_ram_pub(void); unsigned char*R=jit_lib_ram_pub();
+        printf("CDRAM cmd=%08x ack=%08x ack2=%08x dst0=%08x v0=%08x pc=%08x fails=%u\n",
+               *(unsigned*)(R+0xA0100u),*(unsigned*)(R+0xA0140u),*(unsigned*)(R+0xA0200u),*(unsigned*)(R+0x50000u),psx_state.r[2],psx_state.pc,fails); fflush(stdout); }
     if(getenv("TICK")) return (cycles>=3 && !fails)?0:1;
     if(inj) return (jit_lib_lowrd()>0)?0:1;   /* 设备槽读=验收锚; fails 允许(链滑入未装区属预期) */
     return (!fails && outside==0)?0:1;
