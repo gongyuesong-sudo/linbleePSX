@@ -41,7 +41,21 @@
 **修复方向**：切片/补丁消费加**上界门**（`H_C2END` 默认 0x89E00，绝不覆盖 ≥CB 区与栈区）；
 状态词补丁仅允许 C2SEC 数据段白名单；栈区 ra 槽由自研线程起载帧建立（H_C2BOOT：冷态手写 sp=0x8009xxxx 帧+sw ra）。
 
-## 5 终判（attempt1+attempt2 合并，SESSION-53）
+## 6 SESSION-54 attempt3：H_C2END 界门实验 + ra=4 上游定样
+- 机制 `H_C2END`（phys 上界门）：fillhole 只填 <0x89E00（本次 81935 词 + gated 6258 拒注），statepatch 同界。
+- **实验证伪 §4 栈污染假设**：界门开/关两次运行 UNIQ 序列 474 块**逐位一致**，停机/ra/hk 全同——
+  ≥0x89E00 注入词不在本链因果面上。
+- **ra=4 上游定样**（UNIQ 398..425 + RACATCH）：C1 状态机 `bfc1f5xx..f694`（libetc boot glue，ROM 0x1f6xx）
+  对 C2 尾调 `800362c0`，C2 顺序块尾即 epilogue `lw ra,sp,0x14`。入场 **sp=801ffdd0=C1 boot 栈**，
+  而该槽应为 **C2 线程自有栈**的帧返回地址（CreateThread 分配，TCB/栈指针在 >0x89E00 堆区）。
+  冷链无线程切换 → boot 栈残值 4 被 `lw ra` 复活 → `jr 4` → 向量页数据漫步 → pc=0 EMITFAIL。
+  `00000f48/00000fc8` 曾作为块被执行（root 向量区穿洞，非致命）。
+- **终判（task-048 3/3）**：剩余墙 = **C1 kernel 线程调度面**（CreateThread/上下文切换/sp 装载），
+  非设备真值、非状态词、非注入污染。与 docs/33 终判"完整设备驱动面"同源而更精确：先要有线程，
+  再有节拍。attempt 用尽，本任务永久 failed；后继正题移交 task-049/新任务：
+  在 H_C2HOME 面上实现自研线程上下文（为 C2 主线程建栈 + 尾调前切 sp + 帧 ra 约定自洽）。
+
+## 5 旧终判（attempt1+attempt2 合并，SESSION-53；正题已被 §6 再收窄）
 墙未破（未达 Execute!）。§3 旧正题 1)（copier 尾部 C2main 调起条件）**已消解**——C2main 实际会跑。正题改为：
 1) 反汇编 copier（RAM 0x50000 区）尾部：C1 在 C2SEC 拷贝完成后按什么条件调 C2main——
    预计读某设备/内存状态（CDROM 就绪字 / rootCB / 中断掩码）；

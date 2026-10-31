@@ -9,6 +9,7 @@ fail=0
 note(){ echo "HOST41: $*"; }
 [ -f docs/36_c2main_absent.md ] && grep -q "741" docs/36_c2main_absent.md && grep -q "撤回" docs/36_c2main_absent.md && grep -q "UNIQ" docs/36_c2main_absent.md && note "D) docs/36 OK(含 SESSION-53 修正)" || { note "D) docs FAIL"; fail=1; }
 grep -q "H_JITUNIQ" host/mips_jit.c && grep -q "UNIQ-TAIL" host/mips_jit.c && note "E) UNIQUE 清单机制 OK" || { note "E) UNIQUE FAIL"; fail=1; }
+grep -q "H_C2END" host/mips_jit.c && grep -q "线程调度面" docs/36_c2main_absent.md && note "F) C2END 界门 + §6 线程面终判 OK" || { note "F) FAIL"; fail=1; }
 grep -q "H_DEVRST2" host/mips_jit.c && grep -q "0x02000000u" host/mips_jit.c && note "A) DEVRST2 OK" || { note "A) DEVRST2 FAIL"; fail=1; }
 ROM=/home/gill/bleem/psxbios/SCPH1001.BIN
 python3 - "$ROM" <<'PY' || fail=1
