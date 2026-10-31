@@ -31,6 +31,6 @@ echo "b0 19" > /tmp/h64_19.txt
 rm -f /tmp/h64_qd.txt; FWDLIST=/tmp/h64_19.txt FWDSERVE=1 H_IRQTICK=1 FWDLiveThread=1 FWDPoison=1 FWDSBW=/tmp/h64_qd.txt timeout 150 ./host/build/fwd_test >/dev/null 2>&1
 grep -q "801ffe00->dead0000" /tmp/h64_qd.txt && grep -q "m85d4=bfc4c1b0" /tmp/h64_qd.txt && note "D) TCB 迁移(0x9400)后切换语境门+QDUMP 动态读正常" || { note "D) FAIL"; head -2 /tmp/h64_qd.txt; fail=1; }
 grep -q "广义零出口钩" docs/59_create_devsw.md && grep -q "先写结论后跑实验" docs/59_create_devsw.md && note "E) docs/59 锚+勘误声明在" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "59_create_devsw" README.md && [ "$d" -eq 66 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "59_create_devsw" README.md && [ "$d" -eq 67 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST64 CHECK PASS" || echo "HOST64 CHECK FAIL"
 [ $fail -eq 0 ]

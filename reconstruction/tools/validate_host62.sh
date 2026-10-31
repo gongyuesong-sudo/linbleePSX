@@ -29,6 +29,6 @@ for extra in ({},{'H_RAFIX':'1'}):
 print("HOST61: D) 全序批次态两态恒 ok=2 ctx=22(批次态阻因在钩前, docs/58 §3)")
 PYEOF
 grep -q "H_RAFIX" docs/58_rafix_hook.md && grep -q "H-25 到此\*\*工程交付完成\*\*" docs/58_rafix_hook.md && note "E) docs/58 锚齐" || { note "E) 缺锚"; fail=1; }
-d2=$(ls docs/*.md | wc -l); if grep -q "58_rafix_hook" README.md && [ "$d2" -eq 66 ]; then note "F) README 与 docs=$d2 一致"; else note "F) FAIL docs=$d2"; fail=1; fi
+d2=$(ls docs/*.md | wc -l); if grep -q "58_rafix_hook" README.md && [ "$d2" -eq 67 ]; then note "F) README 与 docs=$d2 一致"; else note "F) FAIL docs=$d2"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST62 CHECK PASS" || echo "HOST62 CHECK FAIL"
 [ $fail -eq 0 ]
