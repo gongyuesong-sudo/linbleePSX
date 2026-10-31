@@ -403,7 +403,20 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
                     size_t rd=fread(scr,1,0x60000,fp); fclose(fp); unsigned nf=0;
                     uint32_t *live=(uint32_t*)(psx_ram+0x30000);
                     for(size_t i=0;i+4<=rd;i+=4) if(!live[i/4] && scr[i/4]){ live[i/4]=scr[i/4]; nf++; }   /* 只填零洞: 不压活栈/堆(task-045) */
-                    if(log){fprintf(log,"C2GOLD fillhole bytes=%u words_filled=%u sp=%08x\n",(unsigned)rd,nf,psx_state.r[29]); fflush(log);} } } }
+                    if(log){fprintf(log,"C2GOLD fillhole bytes=%u words_filled=%u sp=%08x\n",(unsigned)rd,nf,psx_state.r[29]); fflush(log);} }
+                { FILE*f2=fopen("/home/gill/bleem/.analysis/golden/golden_c2_slice_low_500_900.bin","rb");   /* 低区派发表终态填洞(task-048) */
+                  if(f2){ uint32_t lw2[4096]; size_t r2=fread(lw2,1,sizeof lw2,f2); fclose(f2); unsigned nf2=0;
+                    for(size_t i=0;i+4<=r2;i+=4){ uint32_t*a=(uint32_t*)(psx_ram+0x500+i/4*4); if(!*a && lw2[i/4]){ *a=lw2[i/4]; nf2++; } }
+                    if(log){fprintf(log,"C2GOLD lowfill words=%u [674]=%08x\n",nf2,*(uint32_t*)(psx_ram+0x674)); fflush(log);} } }
+                { FILE*f3=fopen("/home/gill/bleem/.analysis/golden/c2_state_patch.bin","rb");   /* C2 init 后状态词强写(653 差集, task-048) */
+                  if(f3){ uint32_t cnt=0,nw=0; if(fread(&cnt,4,1,f3)==1){
+                      for(uint32_t k=0;k<cnt && k<4096;k++){ uint32_t o,v; if(fread(&o,4,1,f3)!=1||fread(&v,4,1,f3)!=1) break;
+                        if(o>=0x30000&&o<0x30000+0x67FF0){ *(uint32_t*)(psx_ram+o)=v; nw++; } } }
+                    fclose(f3);
+                    { const char*cs=getenv("H_C2STATE");
+                      if(cs && psx_ram){ *(uint32_t*)(psx_ram+0x89e2c)=(uint32_t)strtoul(cs,0,0);
+                        if(log){fprintf(log,"C2GOLD state-override [89e2c]=%08x\n",*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} } }
+                    if(log){fprintf(log,"C2GOLD statepatch applied=%u [89e2c]=%08x\n",nw,*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} } } } }
           if(ch && p==0x600u && psx_ram){ uint32_t s=*(uint32_t*)(psx_ram+0x674u);
             uint32_t idx=psx_state.r[9];            /* 派发块: v0=0x674; t1=cmd 偏移; t0=[v0+t1]; jr t0 */
             uint32_t *slot=(uint32_t*)(psx_ram+((0x674u+idx)&0x1FFFFFu));
