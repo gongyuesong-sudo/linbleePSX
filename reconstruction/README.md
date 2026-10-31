@@ -51,3 +51,16 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 
 原版是 bleem, LLC 的商业软件(公司 2001 年已结业)。本工程仅为互操作/研究性
 重建; `data/payload.bin` 是原样转储, 请勿再分发。
+
+## 项目终局状态(2026-10-31, 47 个 harness 会话)
+
+- **原生移植已达成**: 见同级 `../port/` —— Linux 原生 `bleem_port`
+  (X11+Wayland 后端, Vulkan 呈现, demo 限制全解除); Wayland selftest
+  在真合成器现场 PASS。
+- **引擎已完整解密**: `decrypted/` 三流 473,417B 逐字节金标准。
+- **PSX BIOS/宿主链研究(H 系列)已触边界**: BIOS ROM 反编译全像、
+  MIPS 块级 JIT(单元+TICK 30M 块零失败)、金标准 RAM/CPU 采样-重放管线、
+  第一方 homebrew 端到端、CDROM/C2 HLE 命令环闭环均已落地;
+  冷跳链达 Execute! 的剩余钥匙 = 完整设备驱动面(GPU/CDROM/DMA 真值),
+  七道墙实证与两案成本对比见 `docs/33_final_route.md`, 归档/继续决定
+  提请用户。游戏内容运行既定走 DuckStation。
