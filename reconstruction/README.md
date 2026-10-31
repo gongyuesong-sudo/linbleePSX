@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 55 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 56 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -66,7 +66,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   七道墙 `docs/33` → 设备/状态词面 `docs/35/36` → 帧槽/中断面 `docs/37/38` → C2 契约面 `docs/39-42` → H-24 契约完整化 `docs/43-45`(关门)。
   **游戏内容运行既定走 DuckStation**(`~/Applications/duckstation-x64.AppImage`)。
 
-### docs 索引(55 篇=54 编号+台账, 按阶段)
+### docs 索引(56 篇=55 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -85,13 +85,14 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | M-9 批2 否证 `docs/52_batch2_falsified` | 早期窗同态+表补转化否证: ctx24 全体归批3; EXN2 宿主修正 |
 | M-10 批3楔子 `docs/53_waiter_census` | ctx24=事件等待服务(WAITER)定性; FWDSERVE/H_IRQTICK 能力; 0x19/0x15 深探针 |
 | M-11 调度器终证 `docs/54_0x19_tcb` | 0x19=线程调度器读回收语境(TCB 三件套验收探针); 45/4a 定序定性作废 |
+| M-12 语境画像 `docs/55_tcb_layout` | suspend 函数字段清单(sp 高16=0x8800)+ready 队列 0x6CE0 布局; 三件套须运行期构建 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算)
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门)
 - harness 状态: `harness-tasks.json`(59 任务终态) + `harness-progress.txt`(SESSION-1..68)
 
 ### 发布镜像

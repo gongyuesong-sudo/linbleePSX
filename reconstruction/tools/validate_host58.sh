@@ -45,6 +45,6 @@ assert 'FWDSUM ok=2 ctx=22 miss=0' in full_s, full_s[-200:]
 print(f"HOST58: C) 45/4a 双态恒 rc=0 复算一致; 全序 ok={full_ok} 恒 {set(('45','4a'))}")
 PYEOF
 grep -q "线程调度/切换服务" docs/54_0x19_tcb.md && grep -q "予以作废" docs/54_0x19_tcb.md && grep -q "TCB 结构" docs/54_0x19_tcb.md && note "D) docs/54 锚齐" || { note "D) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "54_0x19_tcb" README.md && [ "$d" -eq 55 ]; then note "E) README 与 docs=$d 一致"; else note "E) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "54_0x19_tcb" README.md && [ "$d" -eq 56 ]; then note "E) README 与 docs=$d 一致"; else note "E) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST58 CHECK PASS" || echo "HOST58 CHECK FAIL"
 [ $fail -eq 0 ]
