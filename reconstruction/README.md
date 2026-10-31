@@ -52,7 +52,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 原版是 bleem, LLC 的商业软件(公司 2001 年已结业)。本工程仅为互操作/研究性
 重建; `data/payload.bin` 是原样转储, 请勿再分发。
 
-## 项目终局状态(2026-10-31, 63 个 harness 会话, 55 任务全终态 41✓/13✗/1 维护✓)
+## 项目终局状态(2026-10-31 封账, 79 个 harness 会话, 73 任务全终态 60✓/13✗)
 
 ### 三条主线结果
 - **原生移植达成**: 同级 `../port/` = Linux 原生 `bleem_port`(X11+Wayland 双后端, Vulkan 呈现, demo 限制全解除)。
@@ -65,6 +65,11 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   冷跳链达 `Execute!` 被三重实验排除收敛至**完整 kernel+C2 双向契约**(重写级), 判定关门:
   七道墙 `docs/33` → 设备/状态词面 `docs/35/36` → 帧槽/中断面 `docs/37/38` → C2 契约面 `docs/39-42` → H-24 契约完整化 `docs/43-45`(关门)。
   **游戏内容运行既定走 DuckStation**(`~/Applications/duckstation-x64.AppImage`)。
+- **引擎兼容层 H-25 工程交付完成(SESSION-69..81, docs/46-58)**: BIOS 侧 50/50 rootcall handler 映射与活性实证 →
+  可转发核 26/50 双态零分歧 → fwd API(`host/fwd.c`: fwd_init/fwd_entry/fwd_call2)核 26/26 全通 →
+  ctx24 阻因逐级钉死(WAITER 定性→TCB 回收语境→填表三层阻力→设备真值零增益→**墙收敛为切换出口钩**) →
+  `H_RAFIX` 出口钩使 0x19 调度器/0x3d 打印族**孤跑首次转化 rc=0**。批次态剩余=真线程运行期构建(重写级, 不在本仓库范围);
+  全部能力带回归门沉淀(host49-62)。
 
 ### docs 索引(59 篇=58 编号+台账, 按阶段)
 | 阶段 | 文档 |
@@ -95,8 +100,8 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算), host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定)
-- harness 状态: `harness-tasks.json`(59 任务终态) + `harness-progress.txt`(SESSION-1..68)
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验)
+- harness 状态: `harness-tasks.json`(73 任务全终态 60✓/13✗) + `harness-progress.txt`(SESSION-1..82); 封账审计=validate_host63(JSON/日志一致+终态完备+全量绿)
 
 ### 发布镜像
 `linbleePSX/`(GitHub gongyuesong-sudo/linbleePSX)只含**自研文档/脚本/源码**; 版权工件(*.EXE、payload.bin、

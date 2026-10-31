@@ -6,10 +6,10 @@ cd "$(dirname "$0")/.."
 fail=0
 note(){ echo "HOST45: $*"; }
 n=0
-for i in $(seq -w 1 47); do [ -f docs/${i}_*.md ] && n=$((n+1)); done
+for i in $(seq -w 1 58); do [ -f docs/${i}_*.md ] && n=$((n+1)); done
 [ -f docs/evidence_ledger.md ] && n=$((n+1))
-[ "$n" -eq 48 ] && note "A) docs 全 48 篇在" || { note "A) docs 计数=$n != 48"; fail=1; }
-for pat in "48 篇" "H-23" "DuckStation" "validate_host44" "X11 selftest PASS"; do
+[ "$n" -eq 59 ] && note "A) docs 全 59 篇在" || { note "A) docs 计数=$n != 59"; fail=1; }
+for pat in "59 篇" "H-23" "DuckStation" "validate_host44" "X11 selftest PASS"; do
   grep -q "$pat" README.md || { note "B) README 缺锚: $pat"; fail=1; }
 done
 [ "$fail" -eq 0 ] && note "B) README 五锚全在"
