@@ -38,7 +38,7 @@ print(f"HOST54: B/C) 核 26/26 全通; 全量 ok=26 ctx=24 miss=0; ok 集与 doc
 PYEOF
 grep -q "真 handler 会清活表槽" docs/50_fwd_api.md && grep -q "安装态快照" docs/50_fwd_api.md && grep -q "ok=26 ctx=0 miss=0" docs/50_fwd_api.md \
   && note "D) docs/50 锚齐" || { note "D) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); grep -q "50_fwd_api" README.md && [ "$d" -eq 59 ] \
+d=$(ls docs/*.md | wc -l); grep -q "50_fwd_api" README.md && [ "$d" -eq 61 ] \
   && note "E) README 索引与 docs=$d 一致" || { note "E) FAIL docs=$d"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST54 CHECK PASS" || echo "HOST54 CHECK FAIL"
 [ $fail -eq 0 ]
