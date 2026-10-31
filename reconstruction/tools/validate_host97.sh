@@ -29,7 +29,7 @@ PY
 set -- $c
 IP=$(( $1 - $2 - $3 - $4 ))
 if grep -q "$1 = $2✓/$3✗/$4 排队" $D || { [ "$IP" -ge 1 ] && grep -q "$1 = $(( $2 + IP ))✓/$3✗/$4 排队" $D; }; then note "C) 账目口径一致(实况 $1/$2/$3/$4+在途$IP, 报告按关账点表述)"; else note "C) FAIL 账目 $c 在途$IP 未在报告"; fail=1; fi
-dd=$(ls docs/*.md | wc -l); if grep -q "87_grandfinale_report" README.md && [ "$dd" -eq 88 ]; then note "D) docs=$dd + README 索引在"; else note "D) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "87_grandfinale_report" README.md && [ "$dd" -eq 89 ]; then note "D) docs=$dd + README 索引在"; else note "D) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "E) EXE 只读恒" || { note "E) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST97 CHECK PASS" || echo "HOST97 CHECK FAIL"
 [ $fail -eq 0 ]

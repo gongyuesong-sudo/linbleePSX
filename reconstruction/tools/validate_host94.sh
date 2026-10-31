@@ -29,7 +29,7 @@ grep -q "x86 宿主码战役终判封线" README.md && grep -q "x86 宿主码战
 # D) docs
 dd=$(ls docs/*.md | wc -l)
 idx=0; for n in 76_x86_recon 77_two_stage_stub 78_second_stage_map 79_unpack_chain_confluence 80_host_engine_s3 81_service_table_abi 82_mapbuilder_negation 83_static_ceiling 84_wine_boundary 85_native_reverify; do grep -q "$n" README.md || idx=1; done
-[ "$dd" -eq 88 ] && [ $idx -eq 0 ] && note "D) docs=$dd + x86 十章索引全在" || { note "D) FAIL docs=$dd idx=$idx"; fail=1; }
+[ "$dd" -eq 89 ] && [ $idx -eq 0 ] && note "D) docs=$dd + x86 十章索引全在" || { note "D) FAIL docs=$dd idx=$idx"; fail=1; }
 # E) 取证工件
 python3 - <<'PY' || { note "E) FAIL 工件"; true; }
 import json,sys

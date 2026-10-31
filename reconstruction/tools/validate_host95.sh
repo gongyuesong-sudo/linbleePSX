@@ -16,7 +16,7 @@ leak=$(grep -c -E "captured|decoded\.pkl|snapshot\.json" $H/README.md $H/build_c
 dirty=$(ls $H | grep -cE "\.pkl$|\.o$|^captured|snapshot\.json|^boot$|^boot32$|^scan2x$" || true)
 [ "${dirty:-0}" = "0" ] && note "D) 红线: 目录内无 captured/pkl/二进制/快照" || { note "D) FAIL dirty=$dirty"; fail=1; }
 grep -q "不可恢复" docs/86_analysis_harness_rescue.md && grep -q "不谎称" docs/86_analysis_harness_rescue.md && grep -q "2,979/4,327/466,111\|2979/4327/466111" docs/86_analysis_harness_rescue.md && note "E) docs/86 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "86_analysis_harness_rescue" README.md && [ "$dd" -eq 88 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "86_analysis_harness_rescue" README.md && [ "$dd" -eq 89 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 k=0; for f in scan2.c boot2.c shims.s; do a=$(sha256sum $H/$f | cut -c1-16); b=$(grep "  $f\$" $H/manifest.sha256 | cut -c1-16); [ "$a" = "$b" ] && k=$((k+1)); done
 [ "$k" = "3" ] && note "G) manifest 抽 3 一致(scan2/boot2/shims)" || { note "G) FAIL k=$k"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST95 CHECK PASS" || echo "HOST95 CHECK FAIL"

@@ -46,7 +46,7 @@ c=$(objdump -D -b binary -m i386 --adjust-vma=0x10a4e --start-address=0x10b4e --
 d=$(objdump -D -b binary -m i386 --adjust-vma=0x10a4e --start-address=0x10b4e --stop-address=0x10bb2 /tmp/h90.bin 2>/dev/null | grep -cE "call   \*0x4022a4")
 [ "$c" = "4" ] && [ "$d" = "4" ] && note "C) VirtualAlloc(0x1000a)×4 走 table[0] 循环锚" || { note "C) FAIL $c/$d"; fail=1; }
 grep -q "原理性失明" docs/82_mapbuilder_negation.md && grep -q "0x1F800400" docs/82_mapbuilder_negation.md && grep -q "docs/39 契约图的 native 构造代码" docs/82_mapbuilder_negation.md && note "E) docs/82 锚齐(含诚实否证)" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "82_mapbuilder_negation" README.md && [ "$dd" -eq 88 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "82_mapbuilder_negation" README.md && [ "$dd" -eq 89 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "G) EXE 只读恒" || { note "G) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST90 CHECK PASS" || echo "HOST90 CHECK FAIL"
 [ $fail -eq 0 ]
