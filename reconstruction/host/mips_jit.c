@@ -41,6 +41,8 @@ static int ram_fetch(uint32_t vpc, uint32_t *out){
 }
 /* ---- 访存/COP helper（stdcall，生成码直接 call） ---- */
 static FILE *devlog_fp(){ static FILE*f; static int done; if(!done){done=1; if(getenv("H_JITDEV")) f=fopen(getenv("H_JITDEV"),"a"); } return f; }
+static int g_vecprot=0;   /* HLE 向量页写保护开关 */
+static uint32_t g_lowrd=0; /* RAM 0x60-0x6C 设备槽读计数 */
 static void devlog(const char*rw,uint32_t a,uint32_t v){ FILE*f=devlog_fp(); if(!f) return; if((a&0x1FFF0000u)==0x1F800000u) fprintf(f,"%s %08x %08x\n",rw,a,v); }
 /* 最小设备层：0x1F800000-0x1F80FFFF 16-bit 默认开寄存器组（uninit=0xFFFFFFFF；
  * GPU/CDROM status 窗默认 0=ready 已实证无害；写全收，读按寄存器值）*/
@@ -62,6 +64,7 @@ uint32_t __attribute__((stdcall)) jh_lw(uint32_t a){
     a=phys(a);
     if((a0&0xFFFF0000u)==0xFFFE0000u){ uint32_t r=exvbd[(a0&0xFFF)>>2]; devlog("RD",a0,r); return r; }
     if((a0&0x1FFF0000u)==0x1F800000u){ uint32_t r=dev_read(a0); devlog("RD",a0,r); return r; }
+    { uint32_t k=phys(a0); if(k>=0x60u&&k<=0x6Fu&&psx_ram) g_lowrd++; }
     if(a>=0x1FC00000u && a+4<=0x20000000u && psx_rom) return *(const uint32_t*)(psx_rom+(a-0x1FC00000u));
     if(a+4<=0x200000u && psx_ram) return *(const uint32_t*)(psx_ram+a);
     return 0;
@@ -71,7 +74,9 @@ static void watch_store(uint32_t a,uint32_t v){ static int done; static uint32_t
     if(hi&&a>=lo&&a<hi&&(f=devlog_fp())){ fprintf(f,"STR pc=%08x a=%08x v=%08x\n",jit_cur_pc,a,v); fflush(f); } }
 void __attribute__((stdcall)) jh_sw(uint32_t a, uint32_t v){ watch_store(a,v); watch_store(phys(a),v);
     if((a&0xFFFF0000u)==0xFFFE0000u){ exvbd[(a&0xFFF)>>2]=v; devlog("HW",a,v); return; }
-    if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; devlog("WR",a,v); return; } a=phys(a); if(a+4<=0x200000u&&psx_ram) *(uint32_t*)(psx_ram+a)=v; }
+    if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; devlog("WR",a,v); return; } a=phys(a);
+    if(g_vecprot && a>=0x80u && a<0xC0u && psx_ram && v!=0u){ *(uint32_t*)(psx_ram+0x9300u+(a&0x3Cu))=v; watch_store(a,v); return; }  /* 向量页写保护(HLE) */
+    if(a+4<=0x200000u&&psx_ram) *(uint32_t*)(psx_ram+a)=v; }
 uint32_t __attribute__((stdcall)) jh_lb(uint32_t a){ return (jh_lw(a&~3u)>>(8*(a&3)))&0xff; }        /* 有/无符号同低字节，lb 符号扩展在调用点做 */
 uint32_t __attribute__((stdcall)) jh_lbu(uint32_t a){ return jh_lb(a); }
 uint32_t __attribute__((stdcall)) jh_lhu(uint32_t a){ return (jh_lw(a&~3u)>>((a&2)?16:0))&0xffff; }
@@ -372,7 +377,18 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
 /* 引擎期 BIOS 调用：从窗入口执行到停机面（syscall），返回块数与 v0 */
 /* rootcall/syscall 停机面处置：cmd=a0(r4)。当前最小集 = 全 no-op 放行
  * （pc 已在 syscall 下一条=jr $31，续跑自然归位）。返回 0=可续跑 1=停机。 */
+static void hleboot_install(void);
+static int g_hle_done=0;
+uint32_t jit_lib_lowrd(void){ return g_lowrd; }
 static int jit_rootcall_serve(void){
+    if(!g_hle_done && getenv("H_HLEBOOT") && !getenv("H_HLE_EARLY")){ hleboot_install(); g_hle_done=1; }  /* boot_init 之后再终态预放(0x3cc 哨兵覆盖后) */
+    if(getenv("H_EXNVEC")){   /* 金标准终态语义: 异常走 RAM 向量页 0x80(真机安装态), 非 boot 期 0x130 表 */
+        uint32_t epc=psx_state.pc;
+        cop0[14]=epc+8; cop0[13]=(cop0[13]&~0x7Fu)|0x20u; cop0[12]|=(1u<<30);
+        psx_state.pc=0x80u; psx_state.halted=0; psx_state.halt_kind=0;
+        if(jit_rc_log){ fprintf(jit_rc_log,"EXNVEC epc=%08x\n",epc); fflush(jit_rc_log); }
+        return 0;
+    }
     if(psx_state.halt_kind!=1 && psx_state.halt_kind!=3) return 1;
     uint32_t cmd=psx_state.r[4];
     static int exn=-1;
@@ -404,7 +420,84 @@ static int jit_rootcall_serve(void){
 }
 int jit_lib_bios_call_log(uint32_t entry_pc,uint32_t budget,uint32_t *ret_v0,FILE*log);
 int jit_lib_serve(void){ return jit_rootcall_serve(); }   /* probe 用: 单步 syscall/rootcall 放行 */
+
+/* H-13b 路线 b: HLE kernel-RAM 终态预放（docs/21）。分发器(ROM 0x1E988)的
+ * boot 状态机 callee 全在 RAM C2 区(0x3xxxx-0x5xxxx)——真机由 boot DMA 装载。
+ * HLE: 内核镜像复制 + 9 个 callee 打可控返回桩 + DAT 字段终态。 */
+static void hle_stub(uint32_t a,int v){ if(!psx_ram) return;
+    uint32_t *p=(uint32_t*)(psx_ram+a);
+    p[0]= v>=0 ? (0x24020000u|(uint32_t)(v&0xffff)) : 0u;  /* addiu v0,z0,v (或 nop) */
+    p[1]=0x03E00008u; p[2]=0u;                              /* jr ra; nop */
+}
+void hleboot_install(void){
+    if(!psx_ram||!psx_rom) return;
+    const char*gp=getenv("H_GOLDEN");
+    if(gp&&*gp){   /* 金标准: Beetle 跑通 Sony 码+autorun 失败的终态 RAM(取证区文件, 不入库) */
+        FILE*gf=fopen(gp,"rb");
+        if(gf){ fseek(gf,0,SEEK_END); long n=ftell(gf); fseek(gf,0,SEEK_SET);
+            if(n>0x200000) n=0x200000;
+            if(fread(psx_ram,1,n,gf)==(size_t)n){ fclose(gf); return; }
+            fclose(gf);
+        }
+    }
+    memcpy(psx_ram+0x500,(const uint8_t*)psx_rom+0x10000,0x8BF0);           /* FUN_bfc00420 复制 */
+    memcpy(psx_ram+0x9100,"Licensed by Sony Computer Entertainment Inc.",41);  /* model 串(避开向量页) */
+    hle_stub(0x32E24,2);   /* root2 线程入口 → boot 成功推进 */
+    hle_stub(0x33D58,0);   /* 线程枚举 → 0 */
+    hle_stub(0x34998,0);   /* 设备枚举 → 0 */
+    hle_stub(0x336EC,-1);  /* TCB free → 空 */
+    hle_stub(0x376AC,0);   /* 设备 init 路径 */
+    hle_stub(0x37FA8,0);   /* devCommand 转发 */
+    hle_stub(0x37CC8,0);
+    hle_stub(0x5AA00,0);
+    hle_stub(0x5719C,0);
+    /* cdrom: devsw 注册(内核设备表)——open/read 返"无盘"错误, 让 autorun 走失败继续 */
+    uint32_t cds=0x66B00;
+    uint32_t cfn=0x66C00;
+    for(int i=0;i<8;i++){ hle_stub(cfn+i*12,-1); }   /* 全返 -1(addiu v0,z0,0xffff = -1) */
+    uint32_t *c=(uint32_t*)(psx_ram+cds);
+    #define G(i) (0x80000000u|cfn+i*12)
+    c[0]=0x00008001u; c[1]=G(0); c[2]=G(1); c[3]=G(2); c[4]=G(3); c[5]=G(4); c[6]=G(5); c[7]=G(6); c[8]=G(7); c[9]=G(0);
+    memcpy(psx_ram+0x66A80,"cdrom:",7); c[10]=0x80000000u|0x66A80;
+    #undef G
+    /* 设备状态字段(分发器反编译): DevCtl 就绪态 */
+    *(uint32_t*)(psx_ram+0x66940)=0x3B;
+    *(uint32_t*)(psx_ram+0x66948)=0x32;
+    /* RAM 向量表(金标准 docs/18): 0x80 通用异常 → j RAM 0xC80(复制块内真 handler) */
+    *(uint32_t*)(psx_ram+0x80)=0x08000320u;              /* j 0xC80 */
+    for(uint32_t o=0x84;o<0xC0;o+=4) *(uint32_t*)(psx_ram+o)=0x03E00008u;  /* 向量页 fence: jr ra */
+    g_vecprot=1;
+    *(uint32_t*)(psx_ram+0xA0)=0x08000320u;              /* A0h 表入口→同 handler */
+    *(uint32_t*)(psx_ram+0xB0)=0x08000320u;
+    *(uint32_t*)(psx_ram+0xC0)=0x08000320u;
+    *(uint32_t*)(psx_ram+0x79E44)=2;      /* boot 完成态(_DAT_80079e44) */
+    *(uint32_t*)(psx_ram+0x79E5C)=1;
+    *(uint32_t*)(psx_ram+0x150)=0x80032E24u; *(uint32_t*)(psx_ram+0x158)=0x801FFF00u;
+    /* TTY devsw 注册（PSX deviceSwitch 0x28 字节布局；桩函数=jr ra 返 1） */
+    uint32_t ds=0x90000;                  /* devsw 结构 @RAM 0x90000, 函数体 @0x90100+ */
+    uint32_t fn=0x90100;
+    for(int i=0;i<8;i++){ hle_stub(fn+i*12,1); }   /* 8 个入口桩(返 1) */
+    #define F(i) (0x80000000u|fn+i*12)
+    uint32_t *d=(uint32_t*)(psx_ram+ds);
+    d[0]=0x00008001u;      /* version/magic */
+    d[1]=F(0);             /* function(cmd,args) */
+    d[2]=F(1);             /* init  */
+    d[3]=F(2);             /* open  */
+    d[4]=F(3);             /* close */
+    d[5]=F(4);             /* read  */
+    d[6]=F(5);             /* write */
+    d[7]=F(6);             /* ioctln */
+    d[8]=F(7);             /* input  */
+    d[9]=F(0);             /* output */
+    d[10]=0x80000000u|0x86; /* dev name "tty:" @RAM 0x86 区? 用独立名串 */
+    memcpy(psx_ram+0x86,"tty:",5);
+    *(uint32_t*)(psx_ram+0x64)=0x80000000u|ds;   /* stdin devsw */
+    *(uint32_t*)(psx_ram+0x68)=0x80000000u|ds;   /* stdout devsw(替 0xFF 哨兵) */
+    *(uint32_t*)(psx_ram+0x6c)=0x80000000u|ds;   /* stderr devsw */
+    #undef F
+}
 int jit_lib_bios_call2(uint32_t entry_pc,uint32_t budget,uint32_t*v0,uint32_t*kind,uint32_t*endpc){
+    if(getenv("H_HLEBOOT")&&getenv("H_HLE_EARLY")) hleboot_install();
     if(getenv("H_ROOT2")&&psx_ram&&!getenv("H_ROOT2_DONE")){   /* docs/19: root2 线程入口 HLE 桩 + RAM 0x150 头 */
         uint32_t *q=(uint32_t*)(psx_ram+0x32E24u);
         q[0]=0x24020001u; q[1]=0x03E00008u; q[2]=0u;
