@@ -32,6 +32,6 @@ printf "b0 3d\n" > /tmp/h70_3d.txt
 d=$(env H_TIMEROK=1 H_I044OK=1 H_IRQMASK=0xFFFFFFFF H_ISTATCLR=1 H_EVTGEN=0x1 FWDLIST=/tmp/h70_3d.txt timeout 300 ./host/build/fwd_test 4000000 2>&1 | grep "^FWD vec")
 echo "$d" | grep -q "blocks=207248 haltpc=000026d0" && note "D) 五段形态逐字恒" || { note "D) FAIL $d"; fail=1; }
 grep -q "0x93A20020" docs/65_c2_green_thread.md && grep -q "绿色线程" docs/65_c2_green_thread.md && grep -q "结构性无法到达" docs/65_c2_green_thread.md && note "E) docs/65 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "65_c2_green_thread" README.md && [ "$dd" -eq 74 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "65_c2_green_thread" README.md && [ "$dd" -eq 75 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST70 CHECK PASS" || echo "HOST70 CHECK FAIL"
 [ $fail -eq 0 ]

@@ -29,6 +29,6 @@ gcc -m32 -O0 -g -no-pie -I host -o host/build/fwd_test tools/fwd_test.c host/fwd
 d=$(timeout 400 env H_SVCLOW=1 FWDMAIN=100000000 FWDRCLOG=/tmp/h77.rclog ./host/build/fwd_test 2>&1 | grep MAINRUN)
 echo "$d" | grep -q "MAINRUN rc=100000000 kind=0 v0=8005a844 endpc=00000080" && note "D) 主运行形态恒(v0=表槽[1]互证)" || { note "D) FAIL $d"; fail=1; }
 grep -q "运行时自适应补丁码区" docs/70_livescene_patchcode.md && grep -q "活现场" docs/70_livescene_patchcode.md && grep -q '"intr"' docs/70_livescene_patchcode.md && note "E) docs/70 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "70_livescene_patchcode" README.md && [ "$dd" -eq 74 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "70_livescene_patchcode" README.md && [ "$dd" -eq 75 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST77 CHECK PASS" || echo "HOST77 CHECK FAIL"
 [ $fail -eq 0 ]

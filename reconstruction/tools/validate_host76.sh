@@ -17,6 +17,6 @@ t1=$(grep "SEQTOP 0000 cnt=" /tmp/h76.rclog | sed 's/.*cnt=//'); t2=$(grep "SEQT
 if [ "${t1:-0}" -ge 30000000 ] && [ "${t2:-0}" -ge 30000000 ] && [ "${t3:-0}" -ge 30000000 ]; then note "A) 三角三柱 $t1/$t2/$t3"; else note "A) FAIL $t1/$t2/$t3"; fail=1; fi
 grep -q "SVCW pc=00000080 ra=00000000 sp=800dfee0 t9=80079d00" /tmp/h76.rclog && note "B) 僵尸环恒定现场锚" || { note "B) FAIL"; fail=1; }
 grep -q "反指标防腐蚀" docs/69_zombie_ring.md && grep -q "H_SEQTOP" docs/69_zombie_ring.md && grep -q "不成立" docs/69_zombie_ring.md && note "E) docs/69 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "69_zombie_ring" README.md && [ "$dd" -eq 74 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "69_zombie_ring" README.md && [ "$dd" -eq 75 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST76 CHECK PASS" || echo "HOST76 CHECK FAIL"
 [ $fail -eq 0 ]

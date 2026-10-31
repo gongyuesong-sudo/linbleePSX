@@ -16,6 +16,6 @@ m1=$(timeout 300 env H_IRQMASK=0xFFFFFFFF H_ISTATCLR=1 H_EVTGEN=0x1 H_I044OK=1 H
 echo "$m1" | grep -q "endpc=000000b0" && grep -q "EMITFAIL pc=0000010c op=00000004 ra=8005a314" /tmp/h73_m1.rclog && note "B) 六件套同停滞(机制自洽)" || { note "B) FAIL $m1"; fail=1; }
 [ "$(wc -l < /tmp/h73_m0.rclog)" -eq 10 ] && [ "$(wc -l < /tmp/h73_m1.rclog)" -eq 10 ] && note "C) rclog 10 行恒定" || { note "C) FAIL"; fail=1; }
 grep -q "host_service_cb" docs/67_mainrun_hostbridge.md && grep -q "宿主服务指针槽" docs/67_mainrun_hostbridge.md && grep -q "FWDMAIN" docs/67_mainrun_hostbridge.md && note "D) docs/67 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "67_mainrun_hostbridge" README.md && [ "$dd" -eq 74 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "67_mainrun_hostbridge" README.md && [ "$dd" -eq 75 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST73 CHECK PASS" || echo "HOST73 CHECK FAIL"
 [ $fail -eq 0 ]
