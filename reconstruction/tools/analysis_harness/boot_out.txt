@@ -1,0 +1,2 @@
+[boot] view at 0x400000 size 351732
+[boot] SEGV dump (expected at final RET/exit path)

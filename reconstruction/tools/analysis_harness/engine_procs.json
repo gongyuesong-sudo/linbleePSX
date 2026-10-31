@@ -1,0 +1,23 @@
+{
+  "ok": false,
+  "error": {
+    "code": "COMMAND_NOT_FOUND",
+    "message": "'procedures' is not a command for 'rea'. Did you mean 'providers'?"
+  },
+  "meta": {
+    "command": "procedures",
+    "cta": {
+      "description": "Suggested commands:",
+      "commands": [
+        {
+          "command": "rea providers /home/gill/bleem/rewrite/decrypted/stream_10a4c_L71cbf.bin --target-format raw-binary --architecture x86 --entry-point 0x322 --provider ghidra --snapshot engine-snapshot.json --format json --full-output"
+        },
+        {
+          "command": "rea --help",
+          "description": "see all available commands"
+        }
+      ]
+    },
+    "duration": "2ms"
+  }
+}
