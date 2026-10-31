@@ -35,6 +35,6 @@ fi
 (cd ../port && timeout 500 bash tools/final_check.sh > /tmp/h82_fc.log 2>&1) && grep -q "FINAL CHECK PASS" /tmp/h82_fc.log && note "D) port final_check 全绿(封账终跑)" || { note "D) FAIL"; tail -6 /tmp/h82_fc.log; fail=1; }
 d=$(ls docs/*.md | wc -l)
 m=0; for k in 46_cmd_handlers 52_batch2_falsified 58_rafix_hook evidence_ledger; do grep -q "$k" README.md || m=$((m+1)); done
-{ [ "$d" -eq 64 ] && [ $m -eq 0 ] && note "E) docs=$d 抽验锚齐(全量索引 host45 已守)" || { note "E) FAIL docs=$d miss=$m"; fail=1; }; }
+{ [ "$d" -eq 65 ] && [ $m -eq 0 ] && note "E) docs=$d 抽验锚齐(全量索引 host45 已守)" || { note "E) FAIL docs=$d miss=$m"; fail=1; }; }
 [ $fail -eq 0 ] && echo "HOST63 CHECK PASS" || echo "HOST63 CHECK FAIL"
 [ $fail -eq 0 ]

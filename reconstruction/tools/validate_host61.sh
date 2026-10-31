@@ -44,6 +44,6 @@ assert 'FWDSUM ok=2 ctx=22 miss=0' in o,o[-200:]
 print("HOST61: D) 全序基线恒定")
 PYEOF
 grep -q "顺序修正为 \*\*3 → 1\*\*" docs/57_devsem_truth.md && grep -q "切换出口钩" docs/57_devsem_truth.md && note "E) docs/57 锚齐" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "57_devsem_truth" README.md && [ "$d" -eq 64 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "57_devsem_truth" README.md && [ "$d" -eq 65 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST61 CHECK PASS" || echo "HOST61 CHECK FAIL"
 [ $fail -eq 0 ]
