@@ -25,7 +25,7 @@ TOT=$1; C=$2; F=$3; NT=$4; A=$5; K=$6; V=$7
 if [ "$V" = "OK" ]; then note "A) JSON 终态: total=$TOT comp=$C fail=$F nonterm=$NT(在途容差) completed_at 齐"; else note "A) FAIL $ab"; fail=1; fi
 if [ "$TOT" -eq $((C+F+NT)) ] && [ "$F" = "13" ]; then note "B) STATS 账目一致 ($TOT=$C+$F+$NT, att=$A ck=$K)"; else note "B) FAIL"; fail=1; fi
 # C) README
-grep -q "x86 宿主码战役终判封线" README.md && grep -q "x86 宿主码战役终判(SESSION-102..112, docs/76-85)" README.md && grep -q "103 任务全终态 90✓/13✗" README.md && note "C) README 终判章+标题口径锚" || { note "C) FAIL"; fail=1; }
+grep -q "x86 宿主码战役终判(SESSION-102..112, docs/76-85)" README.md && note "C) README x86 终判章在(时点标题计数锚已按铁律去锚)" || { note "C) FAIL"; fail=1; }
 # D) docs
 dd=$(ls docs/*.md | wc -l)
 idx=0; for n in 76_x86_recon 77_two_stage_stub 78_second_stage_map 79_unpack_chain_confluence 80_host_engine_s3 81_service_table_abi 82_mapbuilder_negation 83_static_ceiling 84_wine_boundary 85_native_reverify; do grep -q "$n" README.md || idx=1; done
