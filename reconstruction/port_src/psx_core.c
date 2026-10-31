@@ -159,34 +159,27 @@ void psx_core_free(psx_core_t *c)
 
 void *psx_translate(const psx_core_t *c, uint32_t gpa, uint32_t *win)
 {
+    /* 楔6(BIOS 长跑战役)真值修正: PSX 主 RAM 为全地址空间 2MB 镜像折叠——
+     * 仅设备窗 0x1F800000-0x1F80FFFF 与 BIOS 窗 0xBFC00000-0xBFC7FFFF 例外;
+     * 旧版"越 0x328400 即 BAD"过严, BIOS RAM 探测写(0xFFFF0130)必地址错。 */
     uint32_t w = PSX_WIN_BAD;
     void *p = NULL;
-    uint32_t ram_off = gpa & 0x1FFFFFFFu;
-    if ((gpa >> 28) == 8 || (gpa >> 28) == 0) {
-        /* RAM 主窗 + kseg 镜像 (0x0000_0000.. 与 0x8000_0000.. 同物理) */
-        if (ram_off < PSX_RAM_ALLOCSZ) {
-            p = c->fixed ? (void *)(uintptr_t)(PSX_GPA_RAM_BASE + ram_off)
-                         : c->ram + ram_off;
-            w = PSX_WIN_RAM;
+    if (gpa >= PSX_GPA_MMIO_BASE && gpa < PSX_GPA_MMIO_BASE + 0x10000u) {
+        /* 设备窗: 0x9400 已建模面命中; 0x9400-0xFFFF 保留区仍 BAD(诚实面) */
+        if (gpa - PSX_GPA_MMIO_BASE < PSX_MMIO_ALLOCSZ) {
+            p = c->fixed ? (void *)(uintptr_t)gpa
+                         : (void *)(uintptr_t)(gpa + c->sb[PSXSB_MMIO_DELTA / 4]);
+            w = PSX_WIN_MMIO;
         }
-    }
-    /* BIOS ROM 窗: 楔1 = host gpa+delta(0x48) 折进 RAM 块(docs/82 平移语义);
-     * 楔2 fixed = 独立 512KB 窗原址恒等, 越出 0x80000 判 BAD */
-    else if ((gpa >> 24) == 0xBF) {
-        if (c->fixed) {
-            if (gpa - PSX_GPA_ROM_BASE < PSX_BIOS_SIZE) {
-                p = (void *)(uintptr_t)gpa; w = PSX_WIN_ROM;
-            }
-        } else {
-            p = (void *)(uintptr_t)(gpa + c->sb[PSXSB_ROM_DELTA / 4]);
-            w = PSX_WIN_ROM;
-        }
-    }
-    /* MMIO 窗 (0x1F800000-0x1F809400): 楔1 delta 平移 / 楔2 恒等 */
-    else if (gpa >= PSX_GPA_MMIO_BASE && gpa - PSX_GPA_MMIO_BASE < PSX_MMIO_ALLOCSZ) {
-        p = c->fixed ? (void *)(uintptr_t)gpa
-                     : (void *)(uintptr_t)(gpa + c->sb[PSXSB_MMIO_DELTA / 4]);
-        w = PSX_WIN_MMIO;
+    } else if (gpa >= PSX_GPA_ROM_BASE && gpa - PSX_GPA_ROM_BASE < PSX_BIOS_SIZE) {
+        /* BIOS 512KB 窗 */
+        if (c->fixed) { p = (void *)(uintptr_t)gpa; w = PSX_WIN_ROM; }
+        else { p = (void *)(uintptr_t)(gpa + c->sb[PSXSB_ROM_DELTA / 4]); w = PSX_WIN_ROM; }
+    } else {
+        /* RAM 全镜像: off = gpa & 0x1FFFFF (2MB 物理折叠) */
+        uint32_t off = gpa & 0x1FFFFFu;
+        p = c->fixed ? (void *)(uintptr_t)(PSX_GPA_RAM_BASE + off) : c->ram + off;
+        w = PSX_WIN_RAM;
     }
     if (win) *win = w;
     return p;
@@ -243,8 +236,8 @@ int cmd_psx_selftest(int argc, char **argv)
     CHK(m1 && m2 && m3 && w == PSX_WIN_MMIO && m1 != m2 &&
         (uint8_t *)m2 >= c.mmio && (uint8_t *)m2 < c.mmio + PSX_MMIO_ALLOCSZ,
         "xlat_mmio_1040_1800_1120");
-    CHK(psx_translate(&c, 0x7FFFFFFFu, &w) == NULL && w == PSX_WIN_BAD,
-        "xlat_oob_bad");
+    CHK(psx_translate(&c, 0x7FFFFFFFu, &w) == c.ram + 0x1FFFFFu && w == PSX_WIN_RAM,
+        "xlat_ram_full_mirror_fold");
 
     /* 3. 读写 roundtrip: RAM 主窗写→镜像窗读 / MMIO 寄存器堆 */
     *(uint32_t *)p1 = 0xC0FFEE01u;
@@ -285,8 +278,8 @@ int cmd_psx_selftest(int argc, char **argv)
     CHK(q3 == (void *)(uintptr_t)0xBFC00010u && w == PSX_WIN_ROM, "xlat2_bios_identity");
     void *q4 = psx_translate(&f, 0x1F801040u, &w);
     CHK(q4 == (void *)(uintptr_t)0x1F801040u && w == PSX_WIN_MMIO, "xlat2_mmio_identity");
-    CHK(psx_translate(&f, 0xBFC80000u, &w) == NULL && w == PSX_WIN_BAD,
-        "xlat2_bios_window_oob");
+    CHK(psx_translate(&f, 0xBFC80000u, &w) == (void *)(uintptr_t)0x80080000u &&
+        w == PSX_WIN_RAM, "xlat2_bfc8_folds_to_ram");  /* BIOS 窗外=RAM 镜像真值 */
     /* 0 别名窗不可直映(mmap_min_addr=64K 禁裸 0x0 段)——原件同址别名在 guest
      * 页表层, Linux 对等=translate 软件别名; 直读仅限已 mmap 的 0x80000000 域 */
     *(uint32_t *)q1 = 0xDEADBEEFu;

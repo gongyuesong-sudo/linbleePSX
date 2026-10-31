@@ -9,6 +9,7 @@
 #include "psx_cpu.h"
 #include "psx_dev.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SIGN16(x) ((uint32_t)(int32_t)(int16_t)(x))
@@ -179,7 +180,8 @@ int psx_cpu_step(psx_cpu_t *c)
     case 0x0F: SETG(rt, im << 16); break;
     case 0x10: /* COP0 */
         if (rs == 0x10) {                     /* CO special: eret=funct 0x18 */
-            if (f == 0x18) { c->cop0[12] &= ~2u;  /* eret 清 EXL(bit1) */
+            if (f == 0x18 || f == 0x10) { /* eret(0x18)/rfe(0x10, PSX rootcall 返回同义) */
+                c->cop0[12] &= ~2u;
                 c->pc  = c->cop0[14] - 4;
                 c->npc = c->cop0[14];
                 c->cycles++; return 0; }
@@ -191,9 +193,12 @@ int psx_cpu_step(psx_cpu_t *c)
         break;
     case 0x11: /* COP1: 未实现面 */
         enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
-    case 0x12: /* COP2 GTE 最小面(楔5): 命令=rs0 且 rd==0&&sa==0(与 mfc2 $0,$0 硬件性冲突面归命令) */
+    case 0x12: /* COP2 GTE 最小面(楔5/楔6 修): 命令=rs0 且 rt0 且 funct!=0(与 mfc2 $0,$0
+                * 冲突面归命令); sw/lw 系 rs0(rt=数据reg)不误伤——BIOS 长跑首卡
+                * ac290130=sw $9,0x130($1) 被旧规则吞(战役 wedge1 战果) */
         if (rs == 0) {
-            if (((insn >> 11) & 31) == 0 && ((insn >> 6) & 31) == 0) {
+            if (rt == 0 && rd == 0 && ((insn >> 6) & 31) == 0) {
+                /* 命令域: mfc2 $0,gte[0] 无意义面归命令(SFTRGB funct=0 也须命中) */
                 uint32_t sub = insn & 0x3F;
                 if (sub == 0x00) {        /* SFTRGB */
                     int code = (int)((c->gte[28] >> 24) & 3u);
@@ -431,4 +436,57 @@ int cmd_cpu_selftest(int argc, char **argv)
     psx_core_free(&core);
     printf(bad ? "PSX CPU SELFTEST FAIL (bad=%d)\n" : "PSX CPU SELFTEST PASS\n", bad);
     return bad ? 2 : 0;
+}
+
+/* ================= --bios-run N: BIOS 长跑侦察 (战役工具, task-112) =================
+ * 用法: bleem_port --bios-run=200000  (BLEEM_BIOS 必设)
+ * 输出: 每道异常(cause/epc/opcode) + 异常 opcode 直方图 + 终态。*/
+#define HB 512
+int cmd_bios_run(int argc, char **argv)
+{
+    uint32_t nsteps = 2000;
+    for (int i = 1; i < argc; i++)
+        if (strncmp(argv[i], "--bios-run=", 11) == 0) nsteps = (uint32_t)strtoul(argv[i] + 11, 0, 10);
+    (void)argc; (void)argv;
+    psx_core_t core;
+    if (psx_core_init_fixed(&core) != 0) { printf("BISO_EV init FAIL\n"); return 1; }
+    if (psx_load_bios(&core) != 0) { printf("BISO_EV 需 BLEEM_BIOS(装载失败)\n"); psx_core_free(&core); return 3; }
+    psx_cpu_t c; psx_cpu_reset(&c, &core);
+    static uint32_t hist[HB];
+    uint32_t exc_seen = 0, first_cause = 0, first_epc = 0, first_op = 0;
+    uint32_t n = 0;
+    while (n < nsteps) {
+        uint32_t e0 = c.exc_n;
+        psx_cpu_step(&c);
+        n++;
+        if (c.exc_n != e0) {
+            uint32_t epc = c.cop0[14];
+            uint32_t op = 0xFFFFFFFFu;
+            uint32_t w; void *p = psx_translate(&core, epc & ~3u, &w);
+            if (p && w != PSX_WIN_BAD) op = *(volatile uint32_t *)p;
+            if (exc_seen == 0) { first_cause = c.cop0[13]; first_epc = epc; first_op = op; }
+            if (exc_seen < 12)
+                printf("BISO_EXC #%u step=%u cause=%x epc=%x insn=%08x (op=%x rs=%x rt=%x f=%x)\n",
+                       exc_seen, n, c.cop0[13], epc, op, op >> 26, (op >> 21) & 31,
+                       (op >> 16) & 31, op & 63);
+            hist[(op >> 2) % HB]++;
+            exc_seen++;
+        }
+    }
+    printf("BISO_EV steps=%u cycles=%u exc_total=%u pc=%x npc=%x v0=%x sp=%x ra=%x\n",
+           n, c.cycles, c.exc_n, c.pc, c.npc, c.gpr[2], c.gpr[29], c.gpr[31]);
+    printf("BISO_EV first cause=%x epc=%x insn=%08x\n", first_cause, first_epc, first_op);
+    /* top-5 异常 opcode 桶 */
+    for (int k = 0; k < 5; k++) {
+        uint32_t best = 0; int bi = -1;
+        for (int i = 0; i < HB; i++) if (hist[i] > best) { best = hist[i]; bi = i; }
+        if (bi < 0 || best == 0) break;
+        hist[bi] = 0;
+        printf("BISO_TOP #%d x%u\n", k, best);
+    }
+    printf("BISO_EV gpr: ");
+    for (int i = 0; i < 32; i++) printf("%08x ", c.gpr[i]);
+    printf("\nBIOS RUN DONE\n");
+    psx_core_free(&core);
+    return 0;
 }
