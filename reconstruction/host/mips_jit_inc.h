@@ -384,6 +384,7 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
     if(!psx_ram) jit_init();
     psx_state.pc=entry; psx_state.halted=0; psx_state.halt_kind=0; cache_inval();
     static uint32_t seq[65536]; uint32_t nseq=0,done=0; uint32_t lastrep=entry, rep=0;
+    static uint32_t uq[65536]; static uint32_t nuq=0; static uint8_t bloom[1048576];   /* task-048a2 UNIQUE */
     jit_rc_log=log;
     { const char*mb=getenv("H_MAXB"); if(mb) max_blocks=(uint32_t)atoi(mb); }   /* task-045: 大 memcpy 需 >425k */
     if(getenv("H_CDHLE")&&psx_ram){ extern void hlecd_install_pub(void); hlecd_install_pub(); }
@@ -442,8 +443,12 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
         if(cc[h].vpc!=p || !cc[h].code){ void*c=emit_block(p);            if(!c){ psx_state.halted=1; psx_state.halt_kind=2; { FILE*f=devlog_fp(); if(f){fprintf(f,"EMITFAIL pc=%08x op=%08x\n",jit_fail_pc,jit_fail_op);
                       for(uint32_t q=(nseq>8?nseq-8:0); q<nseq && q<65536;q++) fprintf(f,"  PREV[%u]=%08x\n",q,seq[q]);
+                      fprintf(f,"  UNIQ-TAIL(%u):",nuq); for(uint32_t q=(nuq>12?nuq-12:0);q<nuq;q++) fprintf(f," %08x",uq[q]); fprintf(f,"\n");
+
                       fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
         if(nseq<65536) seq[nseq++]=p; else done=1;
+        { uint32_t bk=((p*2654435761u)>>15)&(1048576u-1);
+          if(!bloom[bk] && nuq<65536){ bloom[bk]=1; uq[nuq++]=p; if(getenv("H_JITUNIQ")) fprintf(log,"UNIQ %08x\n",p); } }
         { static int st2=0; if(getenv("JIT_DEBUG")&&st2<400){ uint32_t *u=(uint32_t*)cc[h].code;
             fprintf(stderr,"[T%u pc=%08x code=%p]",st2,p,cc[h].code);
             for(int q=0;q<60;q++) fprintf(stderr," %08x",u[q]); fprintf(stderr,"\n"); fflush(stderr); }
@@ -526,7 +531,7 @@ static int jit_rootcall_serve(void){
             cop0[13]=(psx_state.halt_kind==3)?0xC0u:0x80u;    /* Cause: break 0x30 / syscall 0x20 (bits7-2) */
             cop0[12]|=1u<<30;                                 /* SR.CEL=1 */
             psx_state.pc=h; psx_state.halted=0; psx_state.halt_kind=0;
-            if(jit_rc_log){ fprintf(jit_rc_log,"EXN cmd=%u epc=%08x -> h=%08x\n",cmd,cop0[COP0_EPC],h); fflush(jit_rc_log); }
+            if(jit_rc_log){ fprintf(jit_rc_log,"EXN cmd=%u epc=%08x -> h=%08x sp=%08x ra=%08x hk=%u v0=%08x t9=%08x\n",cmd,cop0[COP0_EPC],h,psx_state.r[29],psx_state.r[31],psx_state.halt_kind,psx_state.r[2],psx_state.r[25]); fflush(jit_rc_log); }
             return 0;
         }
     }
