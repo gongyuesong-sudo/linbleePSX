@@ -41,7 +41,7 @@ print(hex(vals[0]),hex(vals[1]),hex(vals[2]))")
 c=$(strings -a decrypted/stream_10a4c_L71cbf.bin | grep -cE "SYSTEM\.CNF|PSX\.EXE|KERNEL\.EXE|App Paths")
 [ "$c" -ge 4 ] && note "D) s3 CD 路径串链 $c/4" || { note "D) FAIL n=$c"; fail=1; }
 grep -q "零漂移" docs/80_host_engine_s3.md && grep -q "0x4022a4" docs/80_host_engine_s3.md && grep -q "十进制" docs/80_host_engine_s3.md && note "E) docs/80 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "80_host_engine_s3" README.md && [ "$dd" -eq 82 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "80_host_engine_s3" README.md && [ "$dd" -eq 83 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 s=$(sha256sum $E | cut -c1-8); [ "$s" = "b61ee13e" ] && note "G) EXE 只读恒" || { note "G) FAIL"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST88 CHECK PASS" || echo "HOST88 CHECK FAIL"
 [ $fail -eq 0 ]
