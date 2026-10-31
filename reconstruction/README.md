@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 46 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 47 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -66,7 +66,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   七道墙 `docs/33` → 设备/状态词面 `docs/35/36` → 帧槽/中断面 `docs/37/38` → C2 契约面 `docs/39-42` → H-24 契约完整化 `docs/43-45`(关门)。
   **游戏内容运行既定走 DuckStation**(`~/Applications/duckstation-x64.AppImage`)。
 
-### docs 索引(43 篇, 按阶段)
+### docs 索引(47 篇=45 编号+台账+M-4, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -76,6 +76,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | H-20/21/22 墙链 32-38 | C2HOME 供给/终局路线/设备真值/C2SEC 态/C2main 修正/ra4 定案/H-22 关门判 |
 | H-23 契约面 39-42 | 包装器地图/命令 census/cmd 语义表/cmdsem handler 终判 |
 | H-24 完整化 `docs/43_frame_abi`→`docs/44_tfr_bounce`→`docs/45_h24_final` | 帧 ABI 三族+8 线程栈窗/H_TFR 回灌+四路注入终证/契约全集 44cmd 定量关门判 |
+| M-4 映射 `docs/46_cmd_handlers` | 三族派发链(表基 0x200/0x874/0x674)+50/50 handler 完备性实证 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
