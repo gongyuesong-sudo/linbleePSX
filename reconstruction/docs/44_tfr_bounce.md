@@ -41,6 +41,17 @@ H_TFR 把墙从“boot 栈残值死路”推进为“分发器→真 C2 kernel�
 2. H_EVW：宿主按 vblank 节拍对 `0x9F68` 供给推进序列 {0,1,2,0}（写 RAM 镜像后 jit_flush 不适用——数据词非码块, 直写即可被内联 lw 读到）。
 3. 判据：LOOP-DETECT 消失且 UNIQ census 增量 > 0（新块面）。
 
+## §4 task-059 attempt2 终证（SESSION-67）
+四路独立注入各自实测 **UNIQ census diff=0、TFR#1 逐字不变**（`bad=ffffffff jpc=bfc01a80 drd=1f802040`）：
+1. `H_EVW=5000`：块节拍直写引擎状态字 0x9F68 推进 1/2/3 —— 无效（该字不在此控制路径）。
+2. `H_C1PATCH` 码窗 0x1A00-0x2200 压 golden（含活词覆盖 419 词）—— 无效。
+3. `H_DEVGPU`：GPU STAT/GPUREAD HLE ready 轮转（drd 值确变 14000001）—— 无效。
+4. `H_C1PATCH` 线程栈窗族 0x25D600/0x254000 填洞 —— fill 数未增，引擎实际栈不在此窗。
+定样：TFR 毒源是**运行期活值**（引擎自建对象/栈的字段），非任何可静态注入的 RAM 数据窗；
+金标终态数据对冷链分歧点是**过程依赖**（要真执行过 device open/init 序列才会生成）。
+⇒ 达到 Execute! 需要**从零实现 GPU+CD+线程 完整设备契约栈**（engine driver 层），
+非既有注入面可及 —— 与 docs/33/36/38 终判同向，成本为重写级。
+
 ## 已废方案
 - ~~同 jpc 连击≤3 停回灌~~（环不在 TFR 计数上, 在 caller 轮询）。
 rfe 后 EPC 固定回灌 0x80030000 造成节拍环 → 改 EPC 为 C2main 循环体后分支入口
