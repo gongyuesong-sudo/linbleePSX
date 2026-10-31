@@ -50,7 +50,29 @@ t0=[v0+t1]; jr t1 基`）访问时懒填**当前被读槽** `[0x674+t1]`（t1=cm
   零槽 → `final=00000100→00000000 (ra=4)`。下一步(task-045)：抓**装载期**C2
   快照(RetroArch 在 C2SEC 装载后/进 shell 前 SAVE_STATE)或按调用点语义补槽。
 
-## 6. 判据复现
+## 6. SESSION-48 追加（task-045 attempt1：装载期快照假设被证伪）
+- 取证链：`H_RAWATCH`+块序列定位 ra=4 注入面 = C2 `0x32a90` 入口读 `[0x89e2c]`
+  状态机 + `0x362b8 jal→jr ra` 回跳 KSEG0 别名；ra 残值 4 来自 C2 内部调用面。
+- 装载期采样管线落地：`tools/boot_capture.sh`（冷启 RA→t 秒 SAVE_STATE→QUIT 兜底
+  kill；RA1.22 `--command` 仅支持无参命令，`SAVE_STATE_TO_SLOT` 段错误弃用）+
+  `tools/boot_state_probe.py`（SRZIP=#RZIP 魔数, 全 zlib 流拼接法，复用
+  golden_state_parse 布局）。
+- **证伪**：t=5/9/16/32/60s 五时点 RAM 完全同态（66940=0x37、66948=0x32、
+  89e7c=c0002、C2 区 nz=88193 全同，仅运行态噪声页差异）——Beetle 装载在
+  t<5s 内一步到位，不存在更早的"C2SEC 装载后/shell 前"可采窗口。
+- 五片逐一重放冷跳链：`final=00000000` 全同（ra=4 边界不随快照时机变）。
+  `w1AC80=0` 连真机参考态也为零 → 该异常面在真机不触发；我们触发它是因为
+  C2 在我们的**混装 RAM**（自研链堆 + 金标准填洞数据）上跑，C2 从
+  `dev_regs`(0xFFFFFFFF 默认) 读到与 Beetle 设备真值不一致的时序量,
+  走错分支污染返回链。
+- **终判（AGENTS 预登记路线条件达成）**：C2 冷跳链达 Execute! 的钥匙 =
+  **完整设备驱动面**（GPU/CDROM/DMA/时序寄存器真值），非 BIOS MIPS 函数、
+  非快照时机、非跳表槽位。与 task-027/031 对引擎深段的判定同墙。
+  H-20 系列就此触达 MIPS-JIT 宿主仿真范围边界 → 转 task-046 终局评估与
+  归档/镜像决定（游戏内容运行维持 DuckStation；显示层 X11/Wayland/Vulkan
+  要求属 port 线, 不因本判定取消）。
+
+## 7. 判据复现
 `bash tools/validate_host35.sh` — 断言：JIT 单测 PASS(bltz/div 覆盖)、
 无 C2HOME 基线链 18021 面不变、H_C2HOME 链 ≥21000 且 handler 执行 ≥100 次、
 新边界 emitfail∈{bfc01280,bfc012a0,00000100} 记录在案。
