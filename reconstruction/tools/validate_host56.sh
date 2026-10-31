@@ -22,6 +22,6 @@ FWDVECT=/home/gill/bleem/.analysis/golden/rootcall_vec_5s.bin FWDLIST=/tmp/h55_c
 s=$(grep "^FWDSUM" /tmp/h56.log | tail -1)
 if echo "$s" | grep -q "ok=2 ctx=22 miss=0"; then note "B) FWDVECT+EXN2 修正后 ctx 转化恒定: $s"; else note "B) FAIL $s"; fail=1; fi
 if grep -q "逐词一致" docs/52_batch2_falsified.md && grep -q "撤回" docs/52_batch2_falsified.md && grep -q "并入批3" docs/52_batch2_falsified.md; then note "C) docs/52 锚齐"; else note "C) 缺锚"; fail=1; fi
-d=$(ls docs/*.md | wc -l); if grep -q "52_batch2_falsified" README.md && [ "$d" -eq 53 ]; then note "D) README 与 docs=$d 一致"; else note "D) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "52_batch2_falsified" README.md && [ "$d" -eq 54 ]; then note "D) README 与 docs=$d 一致"; else note "D) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST56 CHECK PASS" || echo "HOST56 CHECK FAIL"
 [ $fail -eq 0 ]
