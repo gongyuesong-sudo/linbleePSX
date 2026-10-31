@@ -52,7 +52,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 原版是 bleem, LLC 的商业软件(公司 2001 年已结业)。本工程仅为互操作/研究性
 重建; `data/payload.bin` 是原样转储, 请勿再分发。
 
-## 项目终局状态(2026-10-31 封账, 79 个 harness 会话, 73 任务全终态 60✓/13✗)
+## 项目终局状态(2026-10-31 终封, 91 个 harness 会话, 82 任务全终态 69✓/13✗)
 
 ### 三条主线结果
 - **原生移植达成**: 同级 `../port/` = Linux 原生 `bleem_port`(X11+Wayland 双后端, Vulkan 呈现, demo 限制全解除)。
@@ -70,6 +70,13 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   ctx24 阻因逐级钉死(WAITER 定性→TCB 回收语境→填表三层阻力→设备真值零增益→**墙收敛为切换出口钩**) →
   `H_RAFIX` 出口钩使 0x19 调度器/0x3d 打印族**孤跑首次转化 rc=0**。批次态剩余=真线程运行期构建(重写级, 不在本仓库范围);
   全部能力带回归门沉淀(host49-62)。
+- **H-26/H-27 终判封线(SESSION-83..90, docs/59-66)**: 静态注入六类口穷尽(host64-66) →
+  真设备实装六件套全数落地且**全部出尽**(I_MASK 总根因/I_STAT 写清/事件流/0x1F801040-4F 握手/状态机/Timer 时基;
+  0x3d 死墙→16M 块活循环→生命周期全景真执行至切换墙, host67-69) →
+  **身份三勘**(非 BIOS 线程: magic 全源 0 命中; 非私有 VM: 五"栈"=C2 运行时自生成 MIPS 分派码 37/40, host70-71)。
+  四类"最后缺口"假说(A/A2/静态/设备)全部实验拆除——**机制理解完备, 真完成仅剩"完整 C2 执行环境"
+  (docs/45 量级, 月-季度级), 属工程量而非认知问题**。全线以"机制完备、边界定量"终封; 后续路线: 游戏=DuckStation,
+  本仓库=完整逆向知识资产+可复用能力钩(port/HLE/JIT/fwd 全套)。
 
 ### docs 索引(67 篇=66 编号+台账, 按阶段)
 | 阶段 | 文档 |
@@ -109,7 +116,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
   host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚)
-- harness 状态: `harness-tasks.json`(73 任务全终态 60✓/13✗) + `harness-progress.txt`(SESSION-1..82); 封账审计=validate_host63(JSON/日志一致+终态完备+全量绿)
+- harness 状态: `harness-tasks.json`(82 任务全终态 69✓/13✗) + `harness-progress.txt`(SESSION-1..91); 终封审计=validate_host72(JSON/日志一致+终态完备+port 终跑+全量绿); 封账历史审计=validate_host63
 
 ### 发布镜像
 `linbleePSX/`(GitHub gongyuesong-sudo/linbleePSX)只含**自研文档/脚本/源码**; 版权工件(*.EXE、payload.bin、
