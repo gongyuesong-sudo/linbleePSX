@@ -11,8 +11,10 @@ rm -f build/bleem_port
 if cmake -S . -B build >/dev/null 2>&1 && cmake --build build -j4 >/tmp/h104_b.log 2>&1 && [ -x build/bleem_port ]; then
   note "A) 重建 PASS"; else note "A) FAIL"; grep -i error /tmp/h104_b.log | head -2; fail=1; fi
 unset BLEEM_BIOS; ok=1; tot=""
-for t in psx cpu dev eng; do ./build/bleem_port --$t-selftest >/tmp/h104_$t.log 2>&1; r=$?; p=$(grep -c ": PASS" /tmp/h104_$t.log); f=$(grep -c ": FAIL" /tmp/h104_$t.log); tot="$tot ${t}=${p}P/${f}F"; [ $r -eq 0 ] || ok=0; done
-[ $ok -eq 1 ] && [ "$tot" = " psx=31P/0F cpu=14P/0F dev=8P/0F eng=7P/0F" ] && note "B) 四面回归$tot" || { note "B) FAIL$tot"; fail=1; }
+fsum=0
+fsum=0
+for t in psx cpu dev eng; do ./build/bleem_port --$t-selftest >/tmp/h104_$t.log 2>&1; r=$?; p=$(grep -c ": PASS" /tmp/h104_$t.log); f=$(grep -c ": FAIL" /tmp/h104_$t.log); tot="$tot ${t}=${p}P/${f}F"; eval "p_$t=$p"; fsum=$((fsum+f)); [ $r -eq 0 ] || ok=0; done
+[ $ok -eq 1 ] && [ "$fsum" = "0" ] && [ "$p_psx" -ge 31 ] && [ "$p_cpu" -ge 14 ] && [ "$p_dev" -ge 8 ] && [ "$p_eng" -ge 7 ] && note "B) 四面回归$tot" || { note "B) FAIL$tot"; fail=1; }
 export BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN
 timeout 240 ./build/bleem_port --bios-run=10000000 >/tmp/h104_run.log 2>&1; rr=$?
 grep -q "steps=10000000 cycles=10000000 exc_total=0" /tmp/h104_run.log && ex=1 || ex=0
@@ -22,7 +24,7 @@ if timeout 300 bash /home/gill/bleem/rewrite/tools/validate_host103.sh 2>&1 | gr
 export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
 if timeout 240 bash tools/final_check.sh 2>&1 | grep -q "FINAL CHECK PASS"; then note "E2) final_check 显示面 PASS"; else note "E2) FAIL"; fail=1; fi
 cd /home/gill/bleem/rewrite
-dd=$(ls docs/*.md | wc -l); grep -q "93_bios_marathon_w1" README.md && [ "$dd" -eq 95 ] && note "F) docs=$dd+README" || { note "F) FAIL docs=$dd"; fail=1; }
+dd=$(ls docs/*.md | wc -l); grep -q "93_bios_marathon_w1" README.md && [ "$dd" -eq 96 ] && note "F) docs=$dd+README" || { note "F) FAIL docs=$dd"; fail=1; }
 e=$(sha256sum /home/gill/bleem/demo-v1_4.EXE | cut -c1-8)
 g=$(sha256sum decrypted/stream_10a4c_L71cbf.bin | cut -c1-8)
 romgit=$(git ls-files | grep -icE "SCPH|psxbios|demo-v1_4|demo_patched" || true)
