@@ -18,6 +18,6 @@ echo "$a" | grep -q "SEG 0 rc=4 kind=0 v0=00000000 endpc=044f4c02" && echo "$a" 
 c=$(timeout 300 env H_CPUGOLD=$G H_POKE=83c58:0 H_HOSTRET=1 FWDSEGS=1 FWDMAIN=20000000 FWDRCLOG=/tmp/h81_1.rclog ./host/build/fwd_test 2>/dev/null | grep "SEG 0")
 echo "$c" | grep -q "SEG 0 rc=4 kind=0" && note "C) 单段恒(与楔7 4 块锚一致)" || { note "C) FAIL $c"; fail=1; }
 grep -q "每拍交还宿主" docs/74_multiseg_beat.md && grep -q "FWDSEGS" docs/74_multiseg_beat.md && grep -q "语义上不存在" docs/74_multiseg_beat.md && note "D) docs/74 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "74_multiseg_beat" README.md && [ "$dd" -eq 77 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "74_multiseg_beat" README.md && [ "$dd" -eq 78 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST81 CHECK PASS" || echo "HOST81 CHECK FAIL"
 [ $fail -eq 0 ]

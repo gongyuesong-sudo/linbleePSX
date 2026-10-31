@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 77 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 78 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -84,7 +84,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   帧分发与唤醒协议只存在于宿主 x86 码——纯 guest 语境长程主运行语义上不存在,
   guest 侧可达边界已实测穷尽**。再进一步 = x86 宿主码战线(反编译原 EXE, 新战役级)。
 
-### docs 索引(77 篇=76 编号+台账, 按阶段)
+### docs 索引(78 篇=77 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -124,14 +124,15 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | A3w7 完成段 `docs/73_hostret_segment` | 混合模型双证(服务表窗+宿主 trampoline 段 0x044xxxxx); H_RAMDUMP 证 0x83C58 无自然递减者; **H_HOSTRET 首个 rc=0 完成段**(4 块, 边界声明入账); 楔8=多段回放 |
 | A3w8 节拍 `docs/74_multiseg_beat` | **FWDSEGS 多段回放+宿主最小核: 3 段全通(4/3/3 块稳定节拍)="每拍交还宿主"=golden 空闲态本性; 纯 guest 长程主运行语义上不存在; 裁决点再临(w9 事件注入/终判/封线) |
 | A3w9 边界穷尽 `docs/75_seginject_falsified` | H_SEGP 段间注入三候选全零差异: 入口=单状态词短路径非分发器, **唤醒协议只存在于宿主 x86 码**——guest 侧可达边界实测穷尽; 剩余=②终判封线/③x86 战线 |
-| X86w1 侦察 `docs/76_x86_recon` | PE 基线: .text 仅 1184B stub+**overlay 287,732B 主体容器**; 6 DLL/114 API 无静态 DX(动态解析时代特征); 楔2=stub 反汇编+overlay 扫描 |
+| X86w1 侦察 `docs/76_x86_recon` | PE 基线: .text 仅 1184B stub+**overlay 287,732B 主体容器**; 6 DLL/71 命名 API 无静态 DX(动态解析时代特征); 楔2=stub 反汇编+overlay 扫描 |
+| X86w2 两级 stub `docs/77_two_stage_stub` | 一级 stub=自文件映射+**call base+0x55338 交权**+错误壳; 二段引导器 2,780B 验真(位置无关+基址修正); overlay=[压缩载荷][二段 loader]; objdump raw 路线通 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚)——注: host75 编号未用
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚)——注: host75 编号未用
 - harness 状态: `harness-tasks.json`(92 任务全终态 79✓/13✗) + `harness-progress.txt`(SESSION-1..101); A3 终判封线审计=validate_host83(动态终态+docs=77+能力钩+A3 锚抽验+port 终跑); 历史审计=host72/63
 
 ### 发布镜像
