@@ -42,7 +42,7 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     switch (off) {
     case 0x1070: { /* I_STAT: 返回现值; EVTGEN=每 64 次读翻转置位 vblank 位 0x8 */
         uint32_t v = d->i_stat;
-        if (++d->istat_reads % 64u == 0u) d->i_stat |= 0x8u;
+        if (++d->istat_reads % 64u == 0u) d->i_stat |= 0x1u;   /* 楔8b-2 实验: BIOS 轮询位=PSX 正字 bit0 VBlank(0x8 为 BLEEM 宿主私有面, 对 BIOS 无效) */
         return v;
     }
     case 0x1074: return d->i_mask;
@@ -157,7 +157,10 @@ int cmd_dev_selftest(int argc, char **argv)
     for (int i = 0; i < 63; i++) psx_dev_read(&dev, 0x1070, 4);
     int before = (dev.i_stat & 8) != 0;
     psx_dev_read(&dev, 0x1070, 4);
-    DCHK(!before && (dev.i_stat & 8u) != 0, "evtgen_64read_vblank");
+    /* 楔8b-2 位定案: vblank 节拍位=0x1(PSX 正字 bit0, guest/BIOS 可见面)——
+     * 旧 0x8 系 BLEEM 宿主私有语义混入 guest 可见面(docs/57 判读层次错);
+     * 实验记录: 单改 bit0 不解锁 idle 主序(等待条件=复合, GPU/DMA 大楔议题) */
+    DCHK(!before && (dev.i_stat & 1u) != 0, "evtgen_64read_vblank_bit0");
 
     /* 3. Timer 读推进 0x400 16 位域 (docs/63 M1) */
     dev.timer_cnt[2] = 0xFE00u;
@@ -265,11 +268,11 @@ int cmd_eng_selftest(int argc, char **argv)
     EMIT(P + 0,  I_RT(0x0F, 0, 3, 0x1F80));            /* lui $3,0x1F80 */
     EMIT(P + 4,  I_RT(0x0D, 0, 2, 0x0001));            /* ori $2,1 */
     EMIT(P + 8,  0x40826000u);                         /* mtc0 $2,$12: status.IE=1 */
-    EMIT(P + 12, I_RT(0x0D, 0, 2, 0x0008));            /* ori $2,8 */
-    EMIT(P + 16, I_RT(0x2B, 3, 2, 0x1074));            /* sw→I_MASK=0x8 */
+    EMIT(P + 12, I_RT(0x0D, 0, 2, 0x0001));            /* ori $2,1 (楔8b-2: vblank=bit0 正字) */
+    EMIT(P + 16, I_RT(0x2B, 3, 2, 0x1074));            /* sw→I_MASK=0x1 */
     EMIT(P + 20, I_RT(0x08, 0, 9, 0));                 /* addi $9=0 */
     EMIT(P + 24, I_RT(0x23, 3, 4, 0x1070));            /* loop: lw $4,I_STAT */
-    EMIT(P + 28, I_RT(0x0C, 4, 5, 0x0008));            /* andi $5,$4,8 */
+    EMIT(P + 28, I_RT(0x0C, 4, 5, 0x0001));            /* andi $5,$4,1 */
     EMIT(P + 32, I_RT(0x04, 5, 0, 0xFFFD));            /* beq $5,$0,-3 → loop(P+24) */
     /* vblank handler @0x80000000 */
     EMIT(V0 + 0,  I_RT(0x08, 9, 9, 1));                /* addi $9+1 */
@@ -278,12 +281,12 @@ int cmd_eng_selftest(int argc, char **argv)
     EMIT(V0 + 12, 0x400A6800u);                        /* mfc0 $10,$13 (cause): rd13=0x6800 */
     EMIT(V0 + 16, I_RT(0x2B, 8, 10, 4));               /* sw $10,[+4] */
     EMIT(V0 + 20, I_RT(0x0F, 0, 3, 0x1F80));           /* lui $3,0x1F80 */
-    EMIT(V0 + 24, I_RT(0x0D, 0, 7, 0xFFF7));           /* ori $7,0xFFF7 */
-    EMIT(V0 + 28, I_RT(0x2B, 3, 7, 0x1070));           /* sw AND 清 bit3 */
+    EMIT(V0 + 24, I_RT(0x0D, 0, 7, 0xFFFE));           /* ori $7,0xFFFE */
+    EMIT(V0 + 28, I_RT(0x2B, 3, 7, 0x1070));           /* sw AND 清 bit0 */
     EMIT(V0 + 32, 0x42000018u);                        /* eret */
     EMIT(V0 + 36, I_SPEC(0x00, 0, 0, 0, 0));           /* 槽 nop */
     psx_cpu_reset(&c, &core);
-    dev.i_stat = 0x1230u; dev.istat_reads = 0;
+    dev.i_stat = 0x1220u; dev.istat_reads = 0u;   /* 楔8b-2: bit0 不在初值(EVTGEN 置位路径实走), bit3 不在初值(清位断言真验) */
     c.pc = P - 4; c.npc = P;
     psx_cpu_run(&c, 280);   /* 4步/轮(lw/andi/beq/槽 nop)*64 + 中断 11 步 */
     uint32_t cnt = *(volatile uint32_t *)(uintptr_t)CNT;
