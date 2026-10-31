@@ -18,6 +18,6 @@ echo "$c" | grep -q "endpc=000000b0" && grep -q "EMITFAIL pc=0000010c op=0000000
 d=$(timeout 400 env H_SVCLOW=1 FWDMAIN=100000000 FWDRCLOG=/tmp/h74_100.rclog ./host/build/fwd_test 2>&1)
 echo "$d" | grep -q "MAINRUN rc=100000000 kind=0" && [ "$(grep -c EMITFAIL /tmp/h74_100.rclog)" -eq 0 ] && note "D) 100M 跑穿零死跳(里程碑)" || { note "D) FAIL $d"; fail=1; }
 grep -q "八个数量级" docs/68_mainrun_bridge.md && grep -q "H_SVCLOW" docs/68_mainrun_bridge.md && grep -q "异常向量页" docs/68_mainrun_bridge.md && note "E) docs/68 锚齐" || { note "E) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "68_mainrun_bridge" README.md && [ "$dd" -eq 73 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "68_mainrun_bridge" README.md && [ "$dd" -eq 74 ]; then note "F) README 与 docs=$dd 一致"; else note "F) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST74 CHECK PASS" || echo "HOST74 CHECK FAIL"
 [ $fail -eq 0 ]

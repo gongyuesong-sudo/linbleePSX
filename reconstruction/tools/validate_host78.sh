@@ -15,6 +15,6 @@ grep -q "SVCT 3 pc=00000000 ra=00000000 t9=80079d00 v0=8005a844 sp=800dfee0" /tm
 n1=$(timeout 120 env H_POKE=89d44:5a5a5a5a H_SVCLOW=1 H_SVCT=24 FWDMAIN=500000 FWDRCLOG=/tmp/h78_p.rclog ./host/build/fwd_test 2>/dev/null | grep -c "MAINRUN rc=500000 kind=0")
 grep -q "SVCT 3 pc=00000000 ra=00000000" /tmp/h78_p.rclog && [ "$n1" -eq 1 ] && note "B) 状态词毒值零影响(假说排除)" || { note "B) FAIL"; fail=1; }
 grep -q "disc.state" docs/71_ra_zero_trace.md && grep -q "H_CPUGOLD" docs/71_ra_zero_trace.md && grep -q "死栈帧\|死帧" docs/71_ra_zero_trace.md && note "D) docs/71 锚齐" || { note "D) 缺锚"; fail=1; }
-dd=$(ls docs/*.md | wc -l); if grep -q "71_ra_zero_trace" README.md && [ "$dd" -eq 73 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
+dd=$(ls docs/*.md | wc -l); if grep -q "71_ra_zero_trace" README.md && [ "$dd" -eq 74 ]; then note "E) README 与 docs=$dd 一致"; else note "E) FAIL docs=$dd"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST78 CHECK PASS" || echo "HOST78 CHECK FAIL"
 [ $fail -eq 0 ]
