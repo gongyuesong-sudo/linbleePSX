@@ -271,7 +271,7 @@ static void *emit_block(uint32_t vpc0){
         case 14: if(rt){ rdd(rs); b1(0x35); b4(uimm); wrr(rt);} vpc+=4; if(pend)goto slot_done; continue;   /* xori */
         case 15: if(rt){ mov_imm_eax(uimm<<16); wrr(rt);} vpc+=4; if(pend)goto slot_done; continue;         /* lui */
         case 35: if(rt){ rdd(rs); add_eax_imm(si); push_eax(); call_ptr(H32(jh_lw));
-            if(rt==31 && jalrz_on>0){ push_eax(); mov_imm_eax((uint32_t)si); push_eax(); mov_imm_eax(vpc-4); push_eax(); call_ptr(H32(jh_raw31)); }   /* lw ra 现场(task-050a2) */
+            if(rt==31 && jalrz_on>0){ push_eax(); mov_imm_eax((uint32_t)(int32_t)si); push_eax(); mov_imm_eax(vpc-4); push_eax(); call_ptr(H32(jh_raw31)); }   /* lw ra 现场(task-050a2) */
             wrr(rt);} vpc+=4; if(pend)goto slot_done; continue;   /* lw */
         case 33: if(rt){ rdd(rs); add_eax_imm(si); push_eax(); call_ptr(H32(jh_lhu)); sx_eax_al(); wrr(rt);} vpc+=4; if(pend)goto slot_done; continue;   /* lh */
         case 32: if(rt){ rdd(rs); add_eax_imm(si); push_eax(); call_ptr(H32(jh_lb)); sx_byte_eax(); wrr(rt);} vpc+=4; if(pend)goto slot_done; continue;   /* lb */
@@ -445,6 +445,14 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
                       if(cs && psx_ram){ *(uint32_t*)(psx_ram+0x89e2c)=(uint32_t)strtoul(cs,0,0);
                         if(log){fprintf(log,"C2GOLD state-override [89e2c]=%08x\n",*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} } }
                     if(log){fprintf(log,"C2GOLD statepatch applied=%u [89e2c]=%08x\n",nw,*(uint32_t*)(psx_ram+0x89e2c)); fflush(log);} }
+                if(getenv("H_C2SENT") && psx_ram){   /* 帧槽哨兵预置+自研续跑 handler(task-050a3) */
+                    static const uint32_t h[7]={0x3C028002u,0x3442C1C0u,0xAC420000u,0x24020001u,0x03E00008u,0x00000000u,0x00000000u};
+                    memcpy(psx_ram+0x4C1B0u,h,28);
+                    *(uint32_t*)(psx_ram+0x1FFED4u)=0x8004C1B0u;
+                    extern void jit_flush_range(uint32_t lo,uint32_t hi,int n);
+                    jit_flush_range(0x4C1B0u,0x4C1D0u,0); jit_flush_range(0x4C1B0u,0x4C1D0u,1); jit_flush_range(0x4C1B0u,0x4C1D0u,2);
+                    jit_flush_range(0u,16u,0); jit_flush_range(0u,16u,1); jit_flush_range(0u,16u,2);   /* 清 4 中毒块 */
+                    if(log){fprintf(log,"C2SENT installed slot[1ffed4]=8004C1B0 handler@4C1B0\n"); fflush(log);} }
                 if(getenv("H_JZSLED") && psx_ram){   /* 表改写后: RAM 0x0 ack 跳板 + 向量页定向 flush(task-050) */
                     uint32_t s[4]={0x24020001u,0x03E00008u,0x24020001u,0x00000000u};
                     if(!*(uint32_t*)psx_ram) memcpy(psx_ram,s,16);
