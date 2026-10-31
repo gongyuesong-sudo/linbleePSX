@@ -23,6 +23,17 @@ int main(int argc,char**argv){
     if(jit_lib_load_rom(rom)) return 2;
     FILE*gf=fopen("/home/gill/bleem/.analysis/golden/GOLDEN_RAM_2MB.bin","rb");
     if(!gf||fread(psx_ram,1,0x200000,gf)!=0x200000){printf("golden fail\n");return 2;} fclose(gf);
+    if(getenv("PROBEEX")){   /* v2(task-063): 自建向量跳板+派发块(BOOT16 词形), 表数据用金标 */
+        uint32_t vec[]={0x3C080000u,0x250805C4u,0x01000008u,0u};
+        uint32_t bl0[]={0x24080200u,0x00094880u,0x01094020u,0x8D080000u,0u,0x01000008u};   /* A0: [0x200+c*4] */
+        uint32_t bl1[]={0x3C080000u,0x25080874u,0x00094880u,0x01094020u,0x8D080000u,0u,0x01000008u}; /* B0: [0x874+c*4] */
+        memcpy(psx_ram+0x0A0u,vec,12); vec[1]=0x250805E0u; memcpy(psx_ram+0x0B0u,vec,12);
+        vec[1]=0x25080600u; memcpy(psx_ram+0x0C0u,vec,12);
+        memcpy(psx_ram+0x5C4u,bl0,sizeof bl0); memcpy(psx_ram+0x5E0u,bl1,sizeof bl1); memcpy(psx_ram+0x600u,bl1,sizeof bl1);
+        vec[1]=0u; vec[0]=0x03E00008u; memcpy(psx_ram+0x620u,vec,8);   /* 0xC0 块后旧 cop0 槽→jr ra 无害化 */
+        extern void jit_lib_flush_blocks(void); jit_lib_flush_blocks();
+        printf("PROBEEX dispatch rebuilt\n");
+    }
     const char*pf=getenv("PROBEF"); if(!pf){printf("PROBEF missing\n");return 2;}
     FILE*pfh=fopen(pf,"r"); if(!pfh){printf("PROBEF open fail\n");return 2;}
     uint32_t budget=argc>2?(uint32_t)strtoul(argv[2],0,10):200000u;
@@ -42,7 +53,7 @@ int main(int argc,char**argv){
             if(rc){
                 uint32_t c=psx_state.pc;
                 if(c>=0xBFC4C1B0u&&c<0xBFC4C1C0u) break;              /* 哨兵 = 正常收尾 */
-                if(jit_lib_serve()){ srv++; if(srv>50) break; continue; } /* syscall/rootcall 放行续跑 */
+                if(jit_lib_serve()){ srv++; if(srv>200) break; continue; } /* syscall/rootcall 放行续跑 */
                 break;
             }
         }
