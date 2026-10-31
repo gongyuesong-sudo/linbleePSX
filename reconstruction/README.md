@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 43 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 46 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -56,13 +56,14 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 
 ### 三条主线结果
 - **原生移植达成**: 同级 `../port/` = Linux 原生 `bleem_port`(X11+Wayland 双后端, Vulkan 呈现, demo 限制全解除)。
-  显示面**双代实证**: Wayland selftest PASS(frames=3) + X11 selftest PASS(经 X0 Xwayland cookie, validate_host44 四判),
+  显示面**双代实证+Vulkan 三面**: Wayland selftest PASS(frames=3) + X11 selftest PASS(经 X0 Xwayland cookie, validate_host44 四判),
+  Vulkan 呈现链硬件实证(RTX5080 swapchain 双代直证, validate_host46),
   `bash tools/final_check.sh` 带 DISPLAY 全绿。
 - **引擎完整解密**: `decrypted/` 三流 473,417B 位级金标准(0xfacc/0x1015c/0x10a4c), 位引擎逐指令语义还原(docs/06)。
 - **PSX 宿主链研究(H 系列)已关门**: BIOS SCPH1001 全像反编译、MIPS 块 JIT(TICK 30M 块零失败)、
   金标准 RAM/CPU 采样-重放、homebrew 端到端、CDROM/C2 HLE、根call 16-cmd 语义表+可运转 handler 全部落地;
   冷跳链达 `Execute!` 被三重实验排除收敛至**完整 kernel+C2 双向契约**(重写级), 判定关门:
-  七道墙 `docs/33` → 设备/状态词面 `docs/35/36` → 帧槽/中断面 `docs/37/38` → C2 契约面 `docs/39-42`。
+  七道墙 `docs/33` → 设备/状态词面 `docs/35/36` → 帧槽/中断面 `docs/37/38` → C2 契约面 `docs/39-42` → H-24 契约完整化 `docs/43-45`(关门)。
   **游戏内容运行既定走 DuckStation**(`~/Applications/duckstation-x64.AppImage`)。
 
 ### docs 索引(43 篇, 按阶段)
@@ -74,14 +75,15 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | CDROM·基线 29-31 | CD HLE/基线重锚/冷链 rootcall |
 | H-20/21/22 墙链 32-38 | C2HOME 供给/终局路线/设备真值/C2SEC 态/C2main 修正/ra4 定案/H-22 关门判 |
 | H-23 契约面 39-42 | 包装器地图/命令 census/cmd 语义表/cmdsem handler 终判 |
+| H-24 完整化 `docs/43_frame_abi`→`docs/44_tfr_bounce`→`docs/45_h24_final` | 帧 ABI 三族+8 线程栈窗/H_TFR 回灌+四路注入终证/契约全集 44cmd 定量关门判 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
-- H 系列锚定 validator 序列 host7..host44(近期): host41(H-21/22 census+IRQ 零差分), host42(halt 真身+翻案锚),
-  host43(H-23 桩族/census/CMDW/CMDSEM 11 锚), host44(X11/Wayland 显示四判)
-- harness 状态: `harness-tasks.json`(55 任务终态) + `harness-progress.txt`(SESSION-1..63)
+- H 系列锚定 validator 序列 host7..host49(近期): host45(M-2 文档终稿), host46(Vulkan 双代硬件实证),
+  host47(帧 ABI 26 捕获+8 线程栈窗), host48(H_TFR 回灌+分发器真执行+零回归), host49(契约全集 44cmd 复算)
+- harness 状态: `harness-tasks.json`(59 任务终态) + `harness-progress.txt`(SESSION-1..68)
 
 ### 发布镜像
 `linbleePSX/`(GitHub gongyuesong-sudo/linbleePSX)只含**自研文档/脚本/源码**; 版权工件(*.EXE、payload.bin、
