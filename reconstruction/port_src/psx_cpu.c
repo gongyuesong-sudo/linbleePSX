@@ -7,6 +7,7 @@
  * GTE(cop1/c2)、lwl/lwr/swl/swr、cache 具体语义留楔4。
  */
 #include "psx_cpu.h"
+#include "psx_dev.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -17,7 +18,7 @@ static void enter_exception(psx_cpu_t *c, uint32_t excode, uint32_t badv, int ha
     c->cop0[14] = c->pc;                    /* epc */
     c->cop0[13] = excode << 2;              /* cause.ExCode */
     if (has_badv) c->cop0[8] = badv;        /* vaddr */
-    c->cop0[12] |= 1u;                      /* status.EXL */
+    c->cop0[12] |= 2u;                      /* status.EXL=bit1 (楔5 真值修正: 楔3 误用 bit0=IE) */
     c->branch_pending = 0;
     uint32_t vec = (c->cop0[12] & (1u << 22)) ? 0xBFC00000u : 0x80000080u;
     c->pc  = vec - 4;
@@ -35,6 +36,33 @@ static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int stor
     return 0;
 }
 
+/* 楔4: MMIO 窗命中且挂了 dev → 语义钩(寄存器堆); 否则裸指针。返回 1=走钩 */
+static inline int mmio_hooked(psx_cpu_t *c, uint32_t win)
+{ return win == PSX_WIN_MMIO && c->core->dev != NULL; }
+
+static int ld_val(psx_cpu_t *c, uint32_t gpa, int sz, uint32_t *val)
+{
+    void *p;
+    if (mem_rw(c, gpa, &p, sz, 0) != 0) return -1;
+    uint32_t w = 0; psx_translate(c->core, gpa, &w);
+    if (mmio_hooked(c, w)) { *val = psx_dev_read((psx_dev_t *)c->core->dev,
+                                gpa - PSX_GPA_MMIO_BASE, sz); return 0; }
+    *val = (sz == 1) ? *(uint8_t *)p : (sz == 2) ? *(uint16_t *)p : *(uint32_t *)p;
+    return 0;
+}
+static int st_val(psx_cpu_t *c, uint32_t gpa, int sz, uint32_t val)
+{
+    void *p;
+    if (mem_rw(c, gpa, &p, sz, 1) != 0) return -1;
+    uint32_t w = 0; psx_translate(c->core, gpa, &w);
+    if (mmio_hooked(c, w)) { psx_dev_write((psx_dev_t *)c->core->dev,
+                             gpa - PSX_GPA_MMIO_BASE, val, sz); return 0; }
+    if (sz == 1) *(uint8_t *)p = (uint8_t)val;
+    else if (sz == 2) *(uint16_t *)p = (uint16_t)val;
+    else *(uint32_t *)p = val;
+    return 0;
+}
+
 #define RS(i) (((i) >> 21) & 31)
 #define RT(i) (((i) >> 16) & 31)
 #define RD(i) (((i) >> 11) & 31)
@@ -44,8 +72,29 @@ static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int stor
 #define G(n)  c->gpr[n]
 #define SETG(n, v) do { if (n) c->gpr[n] = (v); } while (0)
 
+/* 楔5: 中断自动进入链。step 头检查(报告点=下条未执行指令, eret 后重执行它);
+ * 条件: status.IE(bit0) && !EXL(bit1) && (I_STAT & I_MASK & 13 源位) */
+static int irq_check(psx_cpu_t *c)
+{
+    psx_dev_t *d = (psx_dev_t *)c->core->dev;
+    if (!d) return 0;
+    uint32_t st = c->cop0[12];
+    if (!(st & 1u) || (st & 2u)) return 0;
+    if (!(d->i_stat & d->i_mask & 0x1FFFu)) return 0;
+    c->cop0[14] = c->npc;                 /* epc = 未执行指令 */
+    c->cop0[13] = (1u << 8);              /* cause: IP8(bit8), ExCode=0 中断 */
+    c->cop0[12] |= 2u;
+    c->branch_pending = 0;
+    uint32_t vec = (st & (1u << 22)) ? 0xBFC00000u : 0x80000000u;
+    c->pc  = vec - 4;
+    c->npc = vec;
+    c->exc_n++;
+    return 1;
+}
+
 int psx_cpu_step(psx_cpu_t *c)
 {
+    if (irq_check(c)) { c->cycles++; return 0; }
     uint32_t insn;
     void *fp;
     if (mem_rw(c, c->npc, &fp, 4, 0) != 0) return -1;   /* ibus/对齐 → 地址错 */
@@ -130,7 +179,7 @@ int psx_cpu_step(psx_cpu_t *c)
     case 0x0F: SETG(rt, im << 16); break;
     case 0x10: /* COP0 */
         if (rs == 0x10) {                     /* CO special: eret=funct 0x18 */
-            if (f == 0x18) { c->cop0[12] &= ~1u;
+            if (f == 0x18) { c->cop0[12] &= ~2u;  /* eret 清 EXL(bit1) */
                 c->pc  = c->cop0[14] - 4;
                 c->npc = c->cop0[14];
                 c->cycles++; return 0; }
@@ -140,17 +189,46 @@ int psx_cpu_step(psx_cpu_t *c)
         else if (rs == 4) c->cop0[rd & 15] = G(rt);     /* mtc0 */
         else { enter_exception(c, 10u, 0, 0); c->cycles++; return 0; }
         break;
-    case 0x11: case 0x12: /* COP1/COP2(GTE): 楔4 */
+    case 0x11: /* COP1: 未实现面 */
         enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
-    case 0x20: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 1, 0)) SETG(rt, (uint32_t)(int32_t)*(int8_t *)p); break; /* lb */
-    case 0x21: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 2, 0)) SETG(rt, SIGN16(*(uint16_t *)p)); break; /* lh */
-    case 0x23: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 4, 0)) SETG(rt, *(uint32_t *)p);         break; /* lw */
-    case 0x24: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 1, 0)) SETG(rt, *(uint8_t *)p);          break; /* lbu */
-    case 0x25: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 2, 0)) SETG(rt, *(uint16_t *)p);         break; /* lhu */
-    case 0x27: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 4, 0)) SETG(rt, *(uint32_t *)p);         break; /* lwu */
-    case 0x28: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 1, 1)) *(uint8_t *)p = (uint8_t)G(rt);   break; /* sb */
-    case 0x29: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 2, 1)) *(uint16_t *)p = (uint16_t)G(rt); break; /* sh */
-    case 0x2B: if (!mem_rw(c, G(rs) + SIGN16(im), &p, 4, 1)) *(uint32_t *)p = G(rt);           break; /* sw */
+    case 0x12: /* COP2 GTE 最小面(楔5): 命令=rs0 且 rd==0&&sa==0(与 mfc2 $0,$0 硬件性冲突面归命令) */
+        if (rs == 0) {
+            if (((insn >> 11) & 31) == 0 && ((insn >> 6) & 31) == 0) {
+                uint32_t sub = insn & 0x3F;
+                if (sub == 0x00) {        /* SFTRGB */
+                    int code = (int)((c->gte[28] >> 24) & 3u);
+                    int sh = (code >= 2) ? 12 : (code == 1 ? 8 : 4);
+                    uint32_t v = c->gte[20];  /* IRGB: r20-27/g12-19/b4-11 */
+                    uint32_t pk = (((v >> 20) & 0xFFu) << 16) | (((v >> 12) & 0xFFu) << 8)
+                                | ((v >> 4) & 0xFFu);
+                    for (int k = 0; k < 3; k++) c->gte[8 + k] = pk << sh;
+                } else if (sub == 0x09) { /* AVZ3 */
+                    uint32_t av = ((c->gte[11] & 0xFFFu) + (c->gte[12] & 0xFFFu)
+                                 + (c->gte[13] & 0xFFFu)) / 3u;
+                    c->gte[3] = (av << 20) | (av & 1u);
+                } else { enter_exception(c, 10u, 0, 0); c->cycles++; return 0; }
+                break;
+            }
+            SETG(rt, c->gte[rd]);                          /* mfc2 */
+            break;
+        }
+        if (rs == 2)      SETG(rt, (rd <= 7) ? ((c->gte[rd] >> 24) & 0xFFu)  /* cfc2 */
+                                             : (c->gte[rd] & 0xFFu));
+        else if (rs == 4) c->gte[rd] = G(rt);              /* mtc2 */
+        else if (rs == 6) c->gte[rd] = (rd <= 7)           /* ctc2 */
+            ? ((c->gte[rd] & 0xFFFFFFu) | ((G(rt) & 0xFFu) << 24))
+            : ((c->gte[rd] & 0xFFFFFF00u) | (G(rt) & 0xFFu));
+        else { enter_exception(c, 10u, 0, 0); c->cycles++; return 0; }
+        break;
+    case 0x20: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 1, &v)) SETG(rt, (uint32_t)(int32_t)(int8_t)v); break; } /* lb */
+    case 0x21: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 2, &v)) SETG(rt, SIGN16(v)); break; }              /* lh */
+    case 0x23: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 4, &v)) SETG(rt, v); break; }                       /* lw */
+    case 0x24: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 1, &v)) SETG(rt, v & 0xFFu); break; }               /* lbu */
+    case 0x25: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 2, &v)) SETG(rt, v & 0xFFFFu); break; }             /* lhu */
+    case 0x27: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 4, &v)) SETG(rt, v); break; }                       /* lwu */
+    case 0x28: st_val(c, G(rs) + SIGN16(im), 1, G(rt)); break;                                                       /* sb */
+    case 0x29: st_val(c, G(rs) + SIGN16(im), 2, G(rt)); break;                                                       /* sh */
+    case 0x2B: st_val(c, G(rs) + SIGN16(im), 4, G(rt)); break;                                                       /* sw */
     case 0x2F: break;                                                                   /* cache: 解释核 nop */
     default: enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
     }
@@ -310,11 +388,11 @@ int cmd_cpu_selftest(int argc, char **argv)
     c.pc = P - 4; c.npc = P;
     psx_cpu_run(&c, 4);   /* addi, syscall, [vec..mfc0] */
     CCHK(c.cop0[13] == (8u << 2) && c.cop0[14] == P + 4 &&
-         (c.cop0[12] & 1u) == 1u && c.exc_n == 1u, "p5_syscall_cause_epc");
+         (c.cop0[12] & 2u) == 2u && c.exc_n == 1u, "p5_syscall_cause_epc");
     psx_cpu_run(&c, 8);   /* handler 余下 + eret + 主程序 2 条 */
     printf("CPU_EV p5 r2=%x r3=%x r4=%x exl=%x npc=%x\n", RDG(2), RDG(3), RDG(4), c.cop0[12]&1, c.npc);
     CCHK(RDG(2) == P + 8 && RDG(3) == 1u && RDG(4) == 2u &&
-         (c.cop0[12] & 1u) == 0u, "p5_eret_resume");
+         (c.cop0[12] & 2u) == 0u, "p5_eret_resume");
 
     /* --- P6 非对齐 → 地址错 --- */
     c.gpr[5] = 0x80020001u;

@@ -21,7 +21,8 @@ typedef struct {
     uint32_t gpr[32];
     uint32_t hi, lo;
     uint32_t pc, npc;
-    uint32_t cop0[16];   /* 12=status 13=cause 14=epc 8=badvaddr */
+    uint32_t cop0[16];   /* 12=status(IE=bit0 EXL=bit1 BEV=bit22 真值) 13=cause 14=epc 8=badv */
+    uint32_t gte[32];    /* 楔5 GTE 寄存器堆(位布局=引擎自定义面, 真机对拍留后) */
     uint32_t cycles;
     uint32_t exc_n;      /* 异常进入计数 */
     int      branch_pending;

@@ -33,12 +33,13 @@
 /* 翻译窗口 id */
 enum { PSX_WIN_RAM = 0, PSX_WIN_ROM = 1, PSX_WIN_MMIO = 2, PSX_WIN_BAD = 3 };
 
-#define PSX_SVC_SLOTS 16
+#define PSX_SVC_SLOTS 37  /* docs/81 服务分派表全量面(楔5; 原 16 为骨架窗) */
 
 typedef struct {
     uint8_t  *ram;                 /* PSX_RAM_ALLOCSZ  */
     uint8_t  *mmio;                /* PSX_MMIO_ALLOCSZ */
     uint8_t  *bios;                /* 楔2 fixed 模式 BIOS 窗 (楔1 模式=NULL) */
+    void     *dev;                 /* 楔4 psx_dev_t* MMIO 语义钩(可 NULL)     */
     int       fixed;               /* 0=楔1 自由分配+delta; 1=楔2 原址直置    */
     char      bios_sha[65];        /* BLEEM_BIOS 装载后 SHA-256 hex (登记用) */
     uint32_t  sb[PSXSB_SIZE / 4];  /* 状态块 (槽值=原件平移语义) */

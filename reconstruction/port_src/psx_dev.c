@@ -184,3 +184,101 @@ int cmd_dev_selftest(int argc, char **argv)
     printf(bad ? "PSX DEV SELFTEST FAIL (bad=%d)\n" : "PSX DEV SELFTEST PASS\n", bad);
     return bad ? 2 : 0;
 }
+
+/* ================= --eng-selftest: 引擎集成面 (楔5 验收) ================= */
+#define ECHK(cond, name)                                                       \
+    do { int _ok = (cond) ? 1 : 0;                                             \
+         printf("ENG_TEST %s: %s\n", name, _ok ? "PASS" : "FAIL");             \
+         if (!_ok) bad++; } while (0)
+
+int cmd_eng_selftest(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    psx_core_t core; psx_dev_t dev; int bad = 0;
+    if (psx_core_init_fixed(&core) != 0) { printf("ENG_EV fixed init FAIL\n"); return 1; }
+    if (psx_load_bios(&core) != 0) { printf("ENG_EV bios load FAIL\n"); return 1; }
+    psx_dev_init(&dev);
+    core.dev = &dev;
+    psx_cpu_t c;
+    const uint32_t P = 0x80010000u, V0 = 0x80000000u, CNT = 0x80030000u;
+
+    /* E1 中断自动进入链: 轮询 64 次 EVTGEN 置位 → IP8 向量 → handler 清位+eret */
+    EMIT(P + 0,  I_RT(0x0F, 0, 3, 0x1F80));            /* lui $3,0x1F80 */
+    EMIT(P + 4,  I_RT(0x0D, 0, 2, 0x0001));            /* ori $2,1 */
+    EMIT(P + 8,  0x40826000u);                         /* mtc0 $2,$12: status.IE=1 */
+    EMIT(P + 12, I_RT(0x0D, 0, 2, 0x0008));            /* ori $2,8 */
+    EMIT(P + 16, I_RT(0x2B, 3, 2, 0x1074));            /* sw→I_MASK=0x8 */
+    EMIT(P + 20, I_RT(0x08, 0, 9, 0));                 /* addi $9=0 */
+    EMIT(P + 24, I_RT(0x23, 3, 4, 0x1070));            /* loop: lw $4,I_STAT */
+    EMIT(P + 28, I_RT(0x0C, 4, 5, 0x0008));            /* andi $5,$4,8 */
+    EMIT(P + 32, I_RT(0x04, 5, 0, 0xFFFD));            /* beq $5,$0,-3 → loop(P+24) */
+    /* vblank handler @0x80000000 */
+    EMIT(V0 + 0,  I_RT(0x08, 9, 9, 1));                /* addi $9+1 */
+    EMIT(V0 + 4,  I_RT(0x0F, 0, 8, 0x8003));           /* lui $8,0x8003 */
+    EMIT(V0 + 8,  I_RT(0x2B, 8, 9, 0));                /* sw $9,[0x80030000] */
+    EMIT(V0 + 12, 0x400A6800u);                        /* mfc0 $10,$13 (cause): rd13=0x6800 */
+    EMIT(V0 + 16, I_RT(0x2B, 8, 10, 4));               /* sw $10,[+4] */
+    EMIT(V0 + 20, I_RT(0x0F, 0, 3, 0x1F80));           /* lui $3,0x1F80 */
+    EMIT(V0 + 24, I_RT(0x0D, 0, 7, 0xFFF7));           /* ori $7,0xFFF7 */
+    EMIT(V0 + 28, I_RT(0x2B, 3, 7, 0x1070));           /* sw AND 清 bit3 */
+    EMIT(V0 + 32, 0x42000018u);                        /* eret */
+    EMIT(V0 + 36, I_SPEC(0x00, 0, 0, 0, 0));           /* 槽 nop */
+    psx_cpu_reset(&c, &core);
+    dev.i_stat = 0x1230u; dev.istat_reads = 0;
+    c.pc = P - 4; c.npc = P;
+    psx_cpu_run(&c, 280);   /* 4步/轮(lw/andi/beq/槽 nop)*64 + 中断 11 步 */
+    uint32_t cnt = *(volatile uint32_t *)(uintptr_t)CNT;
+    uint32_t cause_saved = *(volatile uint32_t *)(uintptr_t)(CNT + 4);
+    printf("ENG_EV e1 cnt=%u cause=%x reads=%u pc=%x exc=%u\n",
+           cnt, cause_saved, dev.istat_reads, c.pc, c.exc_n);
+    ECHK(cnt == 1u && c.gpr[9] == 1u && cause_saved == (1u << 8) &&
+         dev.istat_reads >= 64u && dev.istat_reads <= 72u &&
+         c.exc_n == 1u && (c.pc >> 28) == 8u, "e1_vblank_irq_autoentry");
+    ECHK((dev.i_stat & 8u) == 0u && (c.cop0[12] & 3u) == 1u,
+         "e1_stat_cleared_ie_on_exl_off");
+
+    /* E2 GTE 最小面: mfc2/mtc2/cfc2/ctc2 ABI + AVZ3 + SFTRGB(布局=本引擎定义面) */
+    psx_cpu_reset(&c, &core);
+    c.gte[11] = 300; c.gte[12] = 400; c.gte[13] = 500;
+    EMIT(P + 0, 0x48000009u);                         /* AVZ3 */
+    EMIT(P + 4, 0x48041800u);                         /* mfc2 $4,gte[3](OTZ) */
+    c.pc = P - 4; c.npc = P;
+    psx_cpu_run(&c, 2);
+    ECHK(((c.gte[3] >> 20) & 0xFFFu) == 400u && c.gpr[4] == (400u << 20),
+         "e2_avz3_average");
+    c.gte[20] = (0x12u << 20) | (0x34u << 12) | (0x56u << 4);   /* IRGB */
+    c.gte[28] = 0;                                              /* sf code0 → sh4 */
+    EMIT(P + 0, 0x48000000u);                         /* SFTRGB */
+    EMIT(P + 4, 0x48044000u);                         /* mfc2 $4,gte[8] */
+    c.pc = P - 4; c.npc = P;
+    psx_cpu_run(&c, 2);
+    ECHK(c.gte[8] == (0x00123456u << 4) && c.gte[10] == (0x00123456u << 4) &&
+         c.gpr[4] == (0x00123456u << 4), "e2_sftrgb_rgb_triplet_sh4");
+    EMIT(P + 0, I_RT(0x0D, 0, 2, 0x0001));            /* ori $2,1 */
+    EMIT(P + 4, 0x48C2E000u);                         /* ctc2 $2,gte[28](控制字节=高8位) */
+    EMIT(P + 8, 0x4842E000u);                         /* cfc2 $2,gte[28] */
+    c.pc = P - 4; c.npc = P;
+    psx_cpu_run(&c, 3);
+    ECHK((c.gte[28] & 0xFFu) == 1u && c.gpr[2] == 1u,
+         "e2_ctc2_cfc2_control_byte");   /* rd>7 控制字节=低 8 位(本引擎定义面) */
+
+    /* E3 svc 表 37 槽全量 (docs/81) */
+    ECHK(PSX_SVC_SLOTS == 37 &&
+         (char *)&core.svc[36] - (char *)&core.svc[0] == (int)(36u * sizeof(void *)) &&
+         psx_svc_call(&core, 36, 1, 2) == 0xFFFFFFFFu &&
+         psx_svc_call(&core, 4, 9, 9) == 0u, "e3_svc_table_37_slots");
+
+    /* E4 真 BIOS 烟测: 复位跑 2000 步无崩溃(装载态) */
+    if (core.bios_sha[0]) {
+        psx_cpu_reset(&c, &core);
+        psx_cpu_run(&c, 2000);
+        printf("ENG_EV e4 cycles=%u pc=%x exc=%u\n", c.cycles, c.pc, c.exc_n);
+        ECHK(c.cycles == 2000u, "e4_bios_2000steps_no_crash");
+    } else {
+        ECHK(1, "e4_bios_smoke_skipped_no_rom");
+    }
+
+    psx_core_free(&core);
+    printf(bad ? "PSX ENG SELFTEST FAIL (bad=%d)\n" : "PSX ENG SELFTEST PASS\n", bad);
+    return bad ? 2 : 0;
+}
