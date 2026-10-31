@@ -27,12 +27,21 @@ static void enter_exception(psx_cpu_t *c, uint32_t excode, uint32_t badv, int ha
     c->exc_n++;
 }
 
+uint32_t g_watch_lo = 0, g_watch_hi = 0, g_watch_n = 0;
+int g_watch_post = 0; uint32_t g_watch_done_gpa = 0xFFFFFFFFu, g_watch_last_pc = 0;
 static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int store)
 {
     if (gpa % sz) { enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
     uint32_t w;
     void *p = psx_translate(c->core, gpa, &w);
     if (!p || w == PSX_WIN_BAD) { enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
+    /* 楔4 侦察: RAM 写侦测窗(BIOSRUN_WATCH=lo,hi 归一化地址) */
+    if (store && g_watch_n < 400u) {
+        uint32_t norm = gpa & 0x1FFFFFFFu;
+        if (g_watch_hi && norm >= g_watch_lo && norm < g_watch_hi) {
+            g_watch_n++; g_watch_done_gpa = gpa; g_watch_last_pc = c->pc;
+        }
+    }
     *host = p;
     return 0;
 }
@@ -457,6 +466,11 @@ int psx_load_golden_vectors(psx_core_t *c, const uint8_t *g)
 #define HB 512
 int cmd_bios_run(int argc, char **argv)
 {
+    if (getenv("BIOSRUN_WATCH")) {
+        unsigned lo=0, hi=0; sscanf(getenv("BIOSRUN_WATCH"), "%x,%x", &lo, &hi);
+        g_watch_lo = lo; g_watch_hi = hi; g_watch_n = 0;
+    }
+
     uint32_t nsteps = 2000;
     for (int i = 1; i < argc; i++)
         if (strncmp(argv[i], "--bios-run=", 11) == 0) nsteps = (uint32_t)strtoul(argv[i] + 11, 0, 10);
@@ -495,7 +509,18 @@ int cmd_bios_run(int argc, char **argv)
         uint32_t insn_at = 0xFFFFFFFFu;
         { uint32_t w2; void *p2 = psx_translate(&core, pc_pre, &w2);
           if (p2 && w2 != PSX_WIN_BAD) insn_at = *(volatile uint32_t *)p2; }
+        { char *tw = getenv("BIOSRUN_TRACE");
+          if (tw) { unsigned t0,t1; sscanf(tw, "%u,%u", &t0, &t1);
+            if (n >= t0 && n <= t1)
+                printf("TR %u pc=%x insn=%08x a0=%x a2=%x a3=%x ra=%x\n",
+                       n, pc_pre, insn_at, c.gpr[4], c.gpr[6], c.gpr[7], c.gpr[31]); } }
         psx_cpu_step(&c);
+        if (g_watch_done_gpa != 0xFFFFFFFFu) {
+            uint32_t w9; void *p9 = psx_translate(&core, g_watch_done_gpa, &w9);
+            uint32_t v9 = (p9 && w9 != PSX_WIN_BAD) ? *(volatile uint32_t *)p9 : 0xDEADu;
+            printf("BISO_WATCH pc=%x -> gpa=%x post=%x step=%u\n", g_watch_last_pc, g_watch_done_gpa, v9, n);
+            g_watch_done_gpa = 0xFFFFFFFFu;
+        }
         if (pch_on) tpch[(c.pc >> 4) & 4095u]++;
         uint32_t q = c.pc;
         if (q >= 0xBFC00000u && q < 0xBFC80000u) seg_rom++;
@@ -505,6 +530,25 @@ int cmd_bios_run(int argc, char **argv)
         else seg_other++;
         uint32_t jmp = ((insn_at>>26)==2 || (insn_at>>26)==3 ||
                         ((insn_at>>26)==0 && ((insn_at&63)==8 || (insn_at&63)==9)));
+        /* 楔4 真目标侦测: 计算跳转实际落点, 目标区 16 字全零 = 跳进零区现场 */
+        uint32_t jtgt = 0xFFFFFFFFu;
+        if (jmp) {
+            uint32_t op6 = insn_at>>26;
+            if (op6==2 || op6==3) jtgt = (c.npc & 0xF0000000u) | ((insn_at & 0x03FFFFFFu) << 2);
+            else { uint32_t rs = (insn_at>>21)&31; jtgt = c.gpr[rs]; if (jtgt >= 0x80000000u) jtgt -= 0; }
+            if (jtgt != 0xFFFFFFFFu) {
+                uint32_t nz = 0;
+                for (uint32_t k = 0; k < 16u; k++) {
+                    uint32_t w4; void *p4 = psx_translate(&core, jtgt + k*4u, &w4);
+                    if (p4 && w4 != PSX_WIN_BAD && *(volatile uint32_t *)p4) { nz = 1; break; }
+                }
+                if (!nz && lost < 8) {
+                    printf("BISO_JUMPZERO step=%u from=%x insn=%08x -> tgt=%x ra=%x v0=%x a0=%x t9=%x t8=%x sp=%x\n",
+                           n, pc_pre, insn_at, jtgt, c.gpr[31], c.gpr[2], c.gpr[4], c.gpr[25], c.gpr[8], c.gpr[29]);
+                    lost++;
+                }
+            }
+        }
         uint32_t nb = 0;
         { uint32_t w3; void *p3 = psx_translate(&core, c.npc, &w3);
           if (p3 && w3 != PSX_WIN_BAD) nb = *(volatile uint32_t *)p3; }
