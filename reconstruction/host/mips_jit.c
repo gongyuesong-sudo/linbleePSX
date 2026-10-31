@@ -41,6 +41,9 @@ static int ram_fetch(uint32_t vpc, uint32_t *out){
     return 0;
 }
 /* ---- 访存/COP helper（stdcall，生成码直接 call） ---- */
+static int cmdsem_on=-1; static uint32_t cmd_mb[8];
+int cmdsem_mb_on(void);
+static uint32_t cmdsem_service(uint32_t cmd);
 static FILE *devlog_fp(){ static FILE*f; static int done; if(!done){done=1; if(getenv("H_JITDEV")) f=fopen(getenv("H_JITDEV"),"a"); } return f; }
 static int g_vecprot=0;   /* HLE 向量页写保护开关 */
 static uint32_t g_lowrd=0; /* RAM 0x60-0x6C 设备槽读计数 */
@@ -72,6 +75,8 @@ void __attribute__((stdcall)) jh_cop0_write(uint32_t r0,uint32_t v){ r0&=31; cop
 uint32_t __attribute__((stdcall)) jh_lw(uint32_t a){
     uint32_t a0=a;
     a=phys(a);
+    { extern uint32_t* cmdsem_mb(void); uint32_t*mb=cmdsem_mb();
+      if(cmdsem_mb_on() && a>=0x97F80u && a<0x97F90u) return mb[(a-0x97F80u)>>2]; }
     if(a>=0x2A0100u&&a<0x2A0104u&&devlog_fp()){ extern uint32_t jit_cur_pc; fprintf(devlog_fp(),"LW2A0 pc=%08x a=%08x\n",jit_cur_pc,a0); fflush(devlog_fp()); }
     if(getenv("H_SWTRACE")&&((a>=0x80041000u&&a<0x80041004u)||(a>=0x82000u&&a<0x82004u)||(a>=0x80050000u&&a<0x80050004u))&&devlog_fp()){ static int m; if(m<10){m++; extern uint32_t jit_cur_pc; fprintf(devlog_fp(),"LWT #%d a=%08x pc=%08x\n",m,a,jit_cur_pc); fflush(devlog_fp());} }
     if((a0&0xFFFF0000u)==0xFFFE0000u){ uint32_t r=exvbd[(a0&0xFFF)>>2]; devlog("RD",a0,r); return r; }
@@ -85,6 +90,9 @@ static void watch_store(uint32_t a,uint32_t v){ static int done; static uint32_t
     if(!done){ done=1; { const char*w=getenv("H_WATCH"); if(w){ sscanf(w,"%x:%x",&lo,&hi); } } }
     if(hi&&a>=lo&&a<hi&&(f=devlog_fp())){ fprintf(f,"STR pc=%08x a=%08x v=%08x\n",jit_cur_pc,a,v); fflush(f); } }
 void __attribute__((stdcall)) jh_sw(uint32_t a, uint32_t v){ watch_store(a,v); watch_store(phys(a),v);
+    { uint32_t ph=phys(a); if(cmdsem_on<0) cmdsem_on=getenv("H_CMDSEM")?1:0;
+      if(cmdsem_on && ph>=0x97F80u && ph<0x97F90u){ cmd_mb[(ph-0x97F80u)>>2]=v;
+        if(ph==0x97F8Cu){ cmd_mb[4]=cmdsem_service(v&0x3FFu); } return; } }
     { static int n; if(getenv("H_SWTRACE")&&((a==0x80050000u||a==0x800507fcu||a==0x80040038u)&&n<10||(v&3&&(v>>26)==0x2Fu)&&n<26)){n++; if(jit_rc_log){fprintf(jit_rc_log,"SWTX #%d a=%08x v=%08x pc=%08x\n",n,a,v,jit_cur_pc); fflush(jit_rc_log);} } }
     if((a&0xFFFF0000u)==0xFFFE0000u){ exvbd[(a&0xFFF)>>2]=v; devlog("HW",a,v); return; }
     if((a&0x1FFF0000u)==0x1F800000u){ uint32_t o=a&0xFFFF; dev_regs[o>>2]=v; if(o==0x1810)g_gpuw++;
@@ -109,6 +117,33 @@ void __attribute__((stdcall)) jh_swr(uint32_t a, uint32_t v){ uint32_t w=jh_lw(a
 /* 分支解析：EAX 由 setCC 预置（0/1） → 返回 taken/not-taken 之一并写入 pc */
 /* 铁律：helper 必须纯 stdcall 无任何栈姿态副作用（调试日志曾毁掉 ret $12 平衡）*/
 void __attribute__((stdcall)) jh_dbg(uint32_t tag){ fprintf(stderr,"[CB%u] pc=%08x\n",tag,psx_state.pc); fflush(stderr); }
+static uint32_t cbn=0,fdn=2;
+uint32_t* cmdsem_mb(void){ return cmd_mb; }
+int cmdsem_mb_on(void){ if(cmdsem_on<0) cmdsem_on=getenv("H_CMDSEM")?1:0; return cmdsem_on; }
+static uint32_t cmdsem_service(uint32_t cmd){   /* docs/41 §4 最小集(task-052a3) */
+  uint32_t a0=cmd_mb[0],a1=cmd_mb[1],a2=cmd_mb[2],ret=1; const char*n="DEFAULT";
+  switch(cmd){
+    case 0x00:{ uint32_t idx=++cbn; uint32_t pa=0x000A0000u+idx*0x200u;   /* NewRootCmd: RAM 0xA0000 竞技场 */
+      if(psx_ram && idx<64){ memset(psx_ram+pa,0,0x200); }
+      ret=0x80000000u|pa; n="NewRootCmd"; } break;
+    case 0x08: ret=++fdn; n="open"; break;
+    case 0x07: ret=0; n="close"; break;
+    case 0x01: ret=0; n="read(EOF)"; break;
+    case 0x0C: ret=(int16_t)a1>0?(uint32_t)(int16_t)a1:0; n="write"; break;
+    case 0x12: ret=2; n="printf"; break;
+    case 0x1C: ret=0; n="A28"; break;
+    case 0x20: {   /* InitializeMemory: 真实现——按 class 清 RAM 区并 ack(a1=基址,a2=len 或反向) */
+      uint32_t base=a1,len=a2;
+      if((base&0x1FFFFFu)+len<=0x200000u && psx_ram && len<=0x200000u){ memset(psx_ram+(base&0x1FFFFFu),0,len); }
+      else if(psx_ram && (a0&0x1FFFFFu)+len<=0x200000u && (a0>>28)==8){ memset(psx_ram+(a0&0x1FFFFFu),0,len); base=a0; }
+      ret=0; n="InitMem";
+      if(jit_rc_log){ static int q=0; if(q<8){q++; fprintf(jit_rc_log,"INITMEM base=%08x len=%08x a0=%08x\n",base,len,a0); fflush(jit_rc_log);} } } break;
+    case 0x120: ret=0; n="Mode2"; break;
+    case 0xC0: ret=0; n="ModeC0"; break;
+  }
+  if(jit_rc_log){ static int c=0; if(c<400){ c++;
+    fprintf(jit_rc_log,"CMDSEM %-10s cmd=%x a0=%08x a1=%08x a2=%08x -> %08x ra=%08x\n",n,cmd,a0,a1,a2,ret,psx_state.r[31]); fflush(jit_rc_log);} }
+  return ret; }
 void __attribute__((stdcall)) jh_raw31(uint32_t v,uint32_t si,uint32_t jpc){ if(jit_rc_log){ static int c=0; if(c<400){ c++;
     fprintf(jit_rc_log,"RAW31 jpc=%08x val=%08x sp=%08x sim=%08x\n",jpc,v,psx_state.r[29],si); fflush(jit_rc_log);} } }
 static int jalrz_on = 0;   /* 启动期初始化于 main 前: 见下 */
@@ -475,9 +510,14 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
                 fprintf(log,"\n"); fflush(log); } }
             if(*slot==0u || *slot>0x200000u){
               static const uint32_t hw[]={0x3C028008u,0x34429F00u,0x03E00008u,0x00000000u}; /* lui v0,0x8008; ori v0,0x9F00; jr ra; nop */
+              static const uint32_t tm[]={0x3C1A8009u,0x375A7F80u,0xAF840000u,0xAF850004u,0xAF860008u,0xAF89000Cu,0x8F420010u,0x03E00008u,0x00000000u}; /* cmdsem trampoline(task-052a3) */
+              if(cmdsem_mb_on()){ memcpy(psx_ram+0x94000u,tm,40); *slot=0x94000u; if(slot!=slot2)*slot2=0x94000u;
+                if(log && cmdsem_mb_on()==1){ /* once-ish */ }
+                goto c2home_done; }
               memcpy(psx_ram+0x95000u,hw,16); *slot=0x95000u; *slot2=0x95000u;
               if(!getenv("H_C2GOLD")) *(uint32_t*)(psx_ram+0x89E7Cu)=0x80089F00u;   /* 非 GOLD: 自装 CB 指针 */
-              if(log){fprintf(log,"C2HOME install [674+%x]->0x95000\n",idx); fflush(log);} } } }
+              if(log){fprintf(log,"C2HOME install [674+%x]->0x95000\n",idx); fflush(log);} }
+            c2home_done: ; } }
         { static int rh=-1, nred=0; if(rh<0) rh=!!getenv("H_ROOTHLE");
           if(rh && (p>>28)==3 && p<0x3C160000u && psx_state.r[2]==0x80000010u && nred<8){
               nred++; p=0xBFC059E0u; psx_state.pc=p; h=(p>>2)&(CSLOTS-1);   /* NewRootCmd → ROM+0x59E0 handler */
