@@ -47,6 +47,6 @@ assert len(zeros)==2, zeros
 print("HOST59: D) 全序 clean 恒定 ok=2 ctx=22 (真完成=45/4a 型) + 上方 SPB 双态一致门")
 PYEOF
 grep -q "高16位=0x8800" docs/55_tcb_layout.md && grep -q "运行期构建" docs/55_tcb_layout.md && note "E) docs/55 锚齐" || { note "E) 缺锚"; fail=1; }
-d=$(ls docs/*.md | wc -l); if grep -q "55_tcb_layout" README.md && [ "$d" -eq 56 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
+d=$(ls docs/*.md | wc -l); if grep -q "55_tcb_layout" README.md && [ "$d" -eq 57 ]; then note "F) README 与 docs=$d 一致"; else note "F) FAIL docs=$d"; fail=1; fi
 [ $fail -eq 0 ] && echo "HOST59 CHECK PASS" || echo "HOST59 CHECK FAIL"
 [ $fail -eq 0 ]
