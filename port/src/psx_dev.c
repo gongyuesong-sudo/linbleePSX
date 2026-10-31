@@ -28,7 +28,12 @@ void psx_dev_init(psx_dev_t *d)
     memset(d, 0, sizeof *d);
     /* 上电初值: I_STAT 全清, Timer 目标 0xFFFF, 握手相 0 */
     for (int i = 0; i < 4; i++) d->timer_target[i] = 0xFFFFu;
+    /* 楔8b-① 上电复位 ACK: 驱动器就绪, CDINT0(I_STAT bit2)置位待 BIOS 使能 */
+    d->cd_out[0]=d->cd_out[1]=d->cd_out[2]=d->cd_out[3]=0;
+    d->cd_cmd=0; d->cd_cmds=0;
+    d->i_stat |= 4u;
 }
+
 
 uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
 {
@@ -42,6 +47,15 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     }
     case 0x1074: return d->i_mask;
     case 0x1060: return d->ram_size;              /* 楔6d RAM_SIZE 回读(BIOS 探测) */
+    /* 楔8b-① CDROM CDREAD/CDSTAT/CDSEL(0x1F801820-25, 正字 no$psx 面) */
+    case 0x1820: { uint32_t v = d->cd_out[0]; d->cd_out[0] = 0; return v; }
+    case 0x1821: { uint32_t v = d->cd_out[1]; d->cd_out[1] = 0; return v; }
+    case 0x1822: { uint32_t v = d->cd_out[2]; d->cd_out[2] = 0; return v; }
+    case 0x1823: { uint32_t v = d->cd_out[3]; d->cd_out[3] = 0; return v; }
+    case 0x1824: { /* CDSTAT: bit7=数据出口有货(四字节或), 恒 0x18(drive ready 系) */
+        uint32_t rdy = (d->cd_out[0]|d->cd_out[1]|d->cd_out[2]|d->cd_out[3]) ? 0x80u : 0u;
+        return rdy | 0x18u; }
+    case 0x1825: return 0;                        /* CDSEL/CONFIG 回读 */
     case 0x1044: return d->reg1044;
     case 0x1048: case 0x104C: return 0;
     case 0x104A: { /* 双相位握手: bit0→bit1 逐读推进 (docs/62 状态机化) */
@@ -80,6 +94,16 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1070: d->i_stat &= val; break;              /* docs/57 写 AND 清 */
     case 0x1074: d->i_mask = val; break;
     case 0x1060: d->ram_size = val & 0xFFFFu; break;   /* RAM_SIZE 配置存值 */
+    /* 楔8b-① CDROM 命令口: 写=驱动 ack 中断 + 装载响应(无盘恒 [0x11,0x14,0xC0,0x42]
+     * ——no$psx GetStat 无盘标准参; INIT/其余命令同型响应 = trace 驱动迭代第一档) */
+    case 0x1820:
+        d->cd_cmd = val & 0xFFu; d->cd_cmds++;
+        d->i_stat &= ~4u;                          /* ack CDINT(驱动收令) */
+        d->cd_out[0] = 0x11; d->cd_out[1] = 0x14;  /* no disc F1h */
+        d->cd_out[2] = 0xC0; d->cd_out[3] = 0x42;
+        d->i_stat |= 4u;                           /* data-ready INT(两档合一) */
+        break;
+    case 0x1824: case 0x1825: case 0x1826: case 0x1827: break;  /* TEST/CONFIG 写弃(观测面) */
     case 0x1010: case 0x1014: case 0x1018: case 0x101c:
     case 0x1020: case 0x1024: case 0x1028: case 0x102c: break; /* 控制区存写弃(观测面) */
     case 0x1044: d->reg1044 = val; break;              /* docs/62 RMW 窗(简化直存) */
@@ -147,6 +171,18 @@ int cmd_dev_selftest(int argc, char **argv)
     uint32_t h1 = psx_dev_read(&dev, 0x104A, 2);
     uint32_t h2 = psx_dev_read(&dev, 0x104A, 2);
     DCHK(h0 == 0x1 && h1 == 0x2 && h2 == 0x1, "c2_handshake_two_phase");
+
+    /* D-CDo CDROM 最小面(楔8b-①): 上电 ACK + GetStat 无盘四参 + STAT 位 */
+    psx_dev_t dcd; psx_dev_init(&dcd);
+    DCHK((dcd.i_stat & 4u) != 0u, "cdrom_poweron_ack_bit2");      /* init 置位 */
+    dev.i_stat &= ~4u;   /* 清 ACK 位(模拟 BIOS handler 清位) */
+    psx_dev_write(&dev, 0x1820u, 0x0Bu, 1);                        /* GetStat */
+    uint32_t o0 = psx_dev_read(&dev, 0x1820u, 1), o1 = psx_dev_read(&dev, 0x1821u, 1);
+    uint32_t o2 = psx_dev_read(&dev, 0x1822u, 1), o3 = psx_dev_read(&dev, 0x1823u, 1);
+    uint32_t cst = psx_dev_read(&dev, 0x1824u, 1);
+    DCHK(o0 == 0x11u && o1 == 0x14u && o2 == 0xC0u && o3 == 0x42u &&
+         (cst & 0x18u) == 0x18u && (dev.i_stat & 4u) != 0u && dev.cd_cmds == 1u,
+         "cdrom_getstat_nodisc_F1");
 
     /* 5. GPU GP0 FIFO push/pop + GPUOK (docs/57 真值) */
     psx_dev_write(&dev, 0x1800, 0xE6000400u, 4);        /* E0(显存写命令) */

@@ -19,6 +19,10 @@ typedef struct psx_dev_s {
     uint32_t i_mask;            /* 0x1F801074 */
     uint32_t i_stat;            /* 0x1F801070 写 AND 清 */
     uint32_t istat_reads;       /* EVTGEN 节拍计数 */
+    /* 楔8b-① CDROM 驱动器最小面(0x1F801820-27): 上电复位 ACK + 命令 state machine */
+    uint8_t  cd_out[4];         /* CDREAD 数据出口(读消费清零) */
+    uint32_t cd_cmd;            /* 最近命令 */
+    uint32_t cd_cmds;           /* 命令计数(观测/自测) */
     uint32_t ram_size;          /* 0x1F801060 RAM_SIZE(楔6d: BIOS 写后回读) */
     /* Timer (docs/63): cnt=读推进模型 M1; ctrl 常规 R/W */
     uint32_t timer_cnt[4];      /* 0x1100/1110/1120/1130 */
