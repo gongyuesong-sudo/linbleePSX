@@ -360,6 +360,10 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
     for(;done<max_blocks;done++){
         if(psx_state.halted) break;
         uint32_t p=psx_state.pc, h=(p>>2)&(CSLOTS-1);
+        { static int rh=-1, nred=0; if(rh<0) rh=!!getenv("H_ROOTHLE");
+          if(rh && (p>>28)==3 && p<0x3C160000u && psx_state.r[2]==0x80000010u && nred<8){
+              nred++; p=0xBFC059E0u; psx_state.pc=p; h=(p>>2)&(CSLOTS-1);   /* NewRootCmd → ROM+0x59E0 handler */
+              if(log){fprintf(log,"ROOTHLE redirect->%08x (#%d)\n",p,nred); fflush(log);} } }
         if(p==lastrep){ if(++rep>20000){ if(log){fprintf(log,"LOOP-DETECT pc=%08x\n",p); fflush(log);} break; } }
         else { lastrep=p; rep=0; }
         { static uint32_t pra=0xDEAD0001u; if(getenv("H_RAWATCH")&&psx_state.r[31]!=pra){ FILE*f=devlog_fp(); if(f){fprintf(f,"RAW pc=%08x ra:%08x->%08x\n",p,pra,psx_state.r[31]); fflush(f);} pra=psx_state.r[31]; } }
