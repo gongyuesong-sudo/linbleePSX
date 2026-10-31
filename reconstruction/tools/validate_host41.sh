@@ -27,5 +27,17 @@ if [ "$fail" -eq 0 ]; then
   H_RACATCH=1 H_C2HOME=1 H_C2GOLD=1 H_DEVRST=1 H_DEVRST2=1 H_LOOPREP=3000000 H_MAXB=8000000 HTRACE_LOG=/tmp/h41.log H_ARENA_MB=320 H_SLED_CAP=200 H_BIOSJIT=1 H_BIOSEXN=1 H_JIT_BUDGET=10000000 BLEEM_BIOS=$ROM timeout 600 ./host/build/htrace decrypted/stream_10a4c_L71cbf_relocated.bin 0x400000 0x472000 >/dev/null 2>&1
   grep -qa "BIOS-JIT-CHAIN blocks=" /tmp/h41.log && grep -qa "final=00000000" /tmp/h41.log && note "C) 全链到墙界 OK（未达 Execute!=既定 attempt1 结果）" || { note "C) 链 FAIL"; fail=1; }
 fi
+if [ "$fail" -eq 0 ]; then
+  grep -q "H_IRQ" host/mips_jit.c && [ -f docs/38_h22_final.md ] && grep -q "census 与基线逐位差分 = 0" docs/38_h22_final.md \
+    && note "G) H_IRQ 机制 + docs/38 终判 OK" || { note "G) FAIL"; fail=1; }
+fi
+ROM2=/home/gill/bleem/psxbios/SCPH1001.BIN
+if [ "$fail" -eq 0 ]; then
+  ENVB="H_C2HOME=1 H_C2GOLD=1 H_C2END=0x89E00 H_DEVRST=1 H_DEVRST2=1 H_JITUNIQ=1 H_LOOPREP=3000000 H_MAXB=8000000 H_ARENA_MB=320 H_SLED_CAP=200 H_BIOSJIT=1 H_BIOSEXN=1 H_JIT_BUDGET=10000000 BLEEM_BIOS=$ROM2"
+  env $ENVB HTRACE_LOG=/tmp/h41_b.log timeout 600 ./host/build/htrace decrypted/stream_10a4c_L71cbf_relocated.bin 0x400000 0x472000 >/dev/null 2>&1
+  env $ENVB H_IRQ=3000 HTRACE_LOG=/tmp/h41_i.log timeout 600 ./host/build/htrace decrypted/stream_10a4c_L71cbf_relocated.bin 0x400000 0x472000 >/dev/null 2>&1
+  grep -qa "IRQINJ#8" /tmp/h41_i.log && [ "$(diff <(grep -a '^UNIQ' /tmp/h41_b.log) <(grep -a '^UNIQ' /tmp/h41_i.log) | wc -l)" -eq 0 ] \
+    && note "H) IRQ 注入 8 次 + census 零差分可复算" || { note "H) FAIL"; fail=1; }
+fi
 [ "$fail" -eq 0 ] && echo "HOST41 CHECK PASS" || echo "HOST41 CHECK FAIL"
 [ "$fail" -eq 0 ]

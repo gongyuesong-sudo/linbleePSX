@@ -481,6 +481,18 @@ int  jit_lib_trace_boot(FILE*log,uint32_t entry,uint32_t max_blocks,uint8_t*win,
 
                       fprintf(f,"  ra=%08x t9=%08x v0=%08x\n",psx_state.r[31],psx_state.r[25],psx_state.r[2]); fflush(f);} } break; } cc[h].vpc=p; cc[h].code=c; }
         if(nseq<65536) seq[nseq++]=p; else done=1;
+        { static int irq=-1; static uint32_t nirq=0; static uint32_t lastirqb=0;   /* H_IRQ: vblank 节拍注入(task-049a2) */
+          if(irq<0){ const char*e=getenv("H_IRQ"); irq=e?(int)strtol(e,0,0):0; }
+          if(irq>0 && (int)nseq>irq && nseq-lastirqb>(uint32_t)irq && nirq<8u){
+            lastirqb=nseq; nirq++;
+            dev_regs[0x1070>>2] |= 2u;               /* I_STAT bit1 VBlank=raised */
+            dev_regs[0x1090>>2] |= 2u;               /* I_CTRL bit1 enable */
+            cop0[13] |= 8u;                          /* Cause.IP2 */
+            if(log){fprintf(log,"IRQINJ#%u at=%08x blk=%u\n",nirq,p,nseq); fflush(log);}
+            uint32_t h=jh_lw(0xFFFE0130u); if(!h) h=jh_lw(0x130); if(!h) h=0x1E988u;
+            h&=0x1FFFFFFFu; if(h<0x80000u) h+=0xBFC00000u;
+            cop0[COP0_EPC]=psx_state.pc; cop0[12]|=1u<<30;
+            psx_state.pc=h; if(log){fprintf(log,"IRQINJ -> h=%08x\n",h); fflush(log);} } }
         { uint32_t bk=((p*2654435761u)>>15)&(1048576u-1);
           if(!bloom[bk] && nuq<65536){ bloom[bk]=1; uq[nuq++]=p; if(getenv("H_JITUNIQ")) fprintf(log,"UNIQ %08x\n",p); } }
         { static int st2=0; if(getenv("JIT_DEBUG")&&st2<400){ uint32_t *u=(uint32_t*)cc[h].code;
