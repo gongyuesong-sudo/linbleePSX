@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 86 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 88 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -85,7 +85,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
   guest 侧可达边界已实测穷尽**。再进一步 = x86 宿主码战线(反编译原 EXE, 新战役级)。
 - **x86 宿主码战役终判(SESSION-102..112, docs/76-85)**: 十楔把 `demo-v1_4.EXE` 宿主侧打到静态/动态/native 三路线边界——启动链全破(一级 stub 交权 0x55338 → 二段块表驱动@0xFA0C → 三流解压位级终验 PASS → s3 init 0x10A4E 内含 PSX 内存映射构造器 → 交权 base+0xFA00 三段式); **s3(466KB)=完整宿主引擎**实证(SYSTEM.CNF/PSX.EXE/DDRAW/DSOUND/DINPUT); 服务分派表 0x4022a4 ABI 与 A3 guest 低页槽同构闭环; Win16 API 七处+imports 119 全名修正; docs/06 位引擎 22 锚零漂移复证。**终判: 宿主静态面穷尽可理解、解包链可位级验证; 主循环体最后 20% 依赖 DX/OLE 运行时(静态判据穷尽/Wine-10 三坑/native 不覆盖), 其语义已由 A3 混合执行模型+服务表投影给出等价物——继续=月级 DX/OLE 全栈重放战役, 收益比极低, 封线。**
 
-### docs 索引(86 篇=85 编号+台账, 按阶段)
+### docs 索引(88 篇=87 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -134,15 +134,17 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | X86w7 映射构造器+否证 `docs/82_mapbuilder_negation` | 双判据唯一交叉环=init 循环→**主循环静态 imm 原理性失明(诚实否证)**; **PSX 内存映射构造器现形**(0x1F800400/BIOS 窗/RAM 3.2MB/0x9400 池——docs/39 契约 native 代码在手); 楔8 换判据=大循环×状态块 disp 读簇 |
 | X86w8 静态封顶 `docs/83_static_ceiling` | 三判据连续否证(disp 无判别力 181/shell 环 0/可达 0); **s3 入口=0x10A4E init(块表驱动回调, 无静态被引)**; 三段式启动定型; 主循环 Win32 全走 call*reg×37 动态面——**静态方法边界落账, 主循环归动态战役(Wine 断点)** |
 | X86w9 Wine 边界 `docs/84_wine_boundary` | **EXE 直用 Win16 API 七处**(ord#1 FreeLibrary16/#35/#36/#37+MapLS/UnMapLS/QT_Thunk, imports 修正 119 全名); win16 屏蔽补丁副本 wine 40s 存活(3b3e110e); wine-10 krnl386 崩+ptrace_scope+COM 稳态三坑落账; 楔10=native -m32 重放 |
-| X86w10 native 终验 `docs/85_native_reverify` | **三流位级 selftest 现场复跑全 PASS**(解包链终验闭环)+解包目的位图定版; **boot32 回归坑落账**(.analysis 无版本控制之祸→金 harness 必入 git); 三路线边界总账——**x86 战役具备收官条件** |
+| X86w10 native 终验 `docs/85_native_reverify` | **三流位级 selftest 现场复跑全 PASS**(解包链终验闭环)+解包目的位图定版; **boot32 回归坑落账**(.analysis 无版本控制之祸→金 harness 必入 git); 三路线边界总账——**具备收官条件** |
+| AHw1 抢救 `docs/86_analysis_harness_rescue` | `.analysis/` 金 harness 37 文件入 git(`tools/analysis_harness/`+manifest 基线+build_check 门); scan2 golden 三流尺寸复现=第二证据链; boot2 诚实标"已知回归化石"; 版权红线排除清单齐 |
+| 总收官 `docs/87_grandfinale_report` | **人类读者版全景报告(中英双语)**: 五战线+两交付总表/技术时间线/定案 8 条+边界清单/可复现命令清单(抽检真跑)/工件索引/13✗ 失败账释义/方法论铁律集 |
 | 台账 | evidence_ledger.md |
 
 ### 验证矩阵(全部可现场复跑)
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚), host86(二段图谱锚), host87(解包链会师锚), host88(s3 真身+零漂移锚), host89(服务表 ABI 锚), host90(映射构造器+否证锚), host91(静态封顶锚), host92(Win16 API+wine 边界锚), host93(native 终验+收官条件锚)——注: host75 编号未用
-- harness 状态: `harness-tasks.json`(92 任务全终态 79✓/13✗) + `harness-progress.txt`(SESSION-1..101); A3 终判封线审计=validate_host83(动态终态+docs=77+能力钩+A3 锚抽验+port 终跑); 历史审计=host72/63
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚), host86(二段图谱锚), host87(解包链会师锚), host88(s3 真身+零漂移锚), host89(服务表 ABI 锚), host90(映射构造器+否证锚), host91(静态封顶锚), host92(Win16 API+wine 边界锚), host93(native 终验+收官条件锚), host94(x86 封线七判终审), host95(AH 抢救门), host97(总报告门; host96 编号未用)——注: host75 编号未用
+- harness 状态: `harness-tasks.json`(103 任务全终态 90✓/13✗, AH 战线进行中另记) + `harness-progress.txt`(SESSION-1..115); x86 封线审计=validate_host94(七判: 动态终态/docs/取证工件/抽验/port 终跑); AH 抢救门=host95; 历史审计=host83/72/63
 
 ### 发布镜像
 `linbleePSX/`(GitHub gongyuesong-sudo/linbleePSX)只含**自研文档/脚本/源码**; 版权工件(*.EXE、payload.bin、
