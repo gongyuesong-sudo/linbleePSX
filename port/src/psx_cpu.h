@@ -30,6 +30,7 @@ typedef struct {
     const psx_core_t *core;
 } psx_cpu_t;
 
+extern int psx_cm_enabled;   /* 楔7b: cache 维护写弃开关(默认 1) */
 void psx_cpu_reset(psx_cpu_t *c, const psx_core_t *core); /* pc=0xBFC00000 复位向量 */
 int  psx_cpu_step(psx_cpu_t *c);      /* 执行一条(含延迟槽簿记); 0=ok */
 uint32_t psx_cpu_run(psx_cpu_t *c, uint32_t nsteps); /* 跑 n 步, 返回实步数 */

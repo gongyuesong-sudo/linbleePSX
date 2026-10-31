@@ -15,7 +15,7 @@ for t in psx cpu dev eng; do ./build/bleem_port --$t-selftest >/tmp/h106_$t.log 
 grep -q "e4b_ram_size_writeback: PASS" /tmp/h106_eng.log && rb=1 || rb=0
 [ $ok -eq 1 ] && [ "$fsum" = "0" ] && [ "$p_psx" -ge 31 ] && [ "$p_cpu" -ge 14 ] && [ "$p_dev" -ge 8 ] && [ "$p_eng" -ge 8 ] && [ "$rb" = 1 ] && note "B) 四面回归$tot + e4b RAM_SIZE" || { note "B) FAIL$tot rb=$rb"; fail=1; }
 export BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN
-timeout 200 env BIOSRUN_MMIOTRACE=1 ./build/bleem_port --bios-run=200000 >/tmp/h106_tr.log 2>&1
+timeout 200 env BIOSRUN_NOCM=1 BIOSRUN_MMIOTRACE=1 ./build/bleem_port --bios-run=200000 >/tmp/h106_tr.log 2>&1
 grep -q "DEV_TR W off=0x2040" /tmp/h106_tr.log && spu=1 || spu=0
 grep -q "DEV_TR W off=0x1060" /tmp/h106_tr.log && rs=1 || rs=0
 cdrom=$(grep -c "off=0x1c0" /tmp/h106_tr.log || true)
@@ -28,7 +28,7 @@ export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/n
 if timeout 240 bash tools/final_check.sh 2>&1 | grep -q "FINAL CHECK PASS"; then note "E2) final_check PASS"; else note "E2) FAIL"; fail=1; fi
 cd /home/gill/bleem/rewrite
 grep -q "楔6d 真值" /home/gill/bleem/port/src/psx_core.c && { note "F1) FAIL alias 回滚残留"; fail=1; } || note "F1) alias 回滚干净"
-dd=$(ls docs/*.md | wc -l); grep -q "95_bios_marathon_w3" README.md && [ "$dd" -eq 98 ] && note "F2) docs=$dd+README" || { note "F2) FAIL docs=$dd"; fail=1; }
+dd=$(ls docs/*.md | wc -l); grep -q "95_bios_marathon_w3" README.md && [ "$dd" -eq 100 ] && note "F2) docs=$dd+README" || { note "F2) FAIL docs=$dd"; fail=1; }
 e=$(sha256sum /home/gill/bleem/demo-v1_4.EXE | cut -c1-8)
 g=$(sha256sum decrypted/stream_10a4c_L71cbf.bin | cut -c1-8)
 romgit=$(git ls-files | grep -icE "SCPH|psxbios|demo-v1_4|demo_patched|GOLDEN_RAM_2MB\.bin$" || true)

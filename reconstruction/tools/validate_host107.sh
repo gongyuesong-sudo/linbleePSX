@@ -12,15 +12,15 @@ unset BLEEM_BIOS; ok=1; fsum=0; tot=""
 for t in psx cpu dev eng; do ./build/bleem_port --$t-selftest >/tmp/h107_$t.log 2>&1; r=$?; p=$(grep -c ": PASS" /tmp/h107_$t.log); f=$(grep -c ": FAIL" /tmp/h107_$t.log); tot="$tot ${t}=${p}P/${f}F"; eval "p_$t=$p"; fsum=$((fsum+f)); [ $r -eq 0 ] || ok=0; done
 [ $ok -eq 1 ] && [ "$fsum" = "0" ] && [ "$p_psx" -ge 31 ] && [ "$p_cpu" -ge 14 ] && [ "$p_dev" -ge 8 ] && [ "$p_eng" -ge 8 ] && note "B) 四面回归$tot(阈值化)" || { note "B) FAIL$tot"; fail=1; }
 # C) JUMPZERO 现场复现
-timeout 200 env BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN ./build/bleem_port --bios-run=200000 >/tmp/h107_jz.log 2>&1
+timeout 200 env BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN BIOSRUN_NOCM=1 ./build/bleem_port --bios-run=200000 >/tmp/h107_jz.log 2>&1
 grep -q "BISO_JUMPZERO step=80910 from=bfc0d9a4 insn=01400008 -> tgt=b0 ra=bfc06868" /tmp/h107_jz.log && c1=1 || c1=0
 grep -q "BISO_JUMPZERO step=81896" /tmp/h107_jz.log && c2=1 || c2=0
 [ "$c1" = 1 ] && [ "$c2" = 1 ] && note "C) A(24) 漂移现场两位复现(step 80910/81896)" || { note "C) FAIL c1=$c1 c2=$c2"; fail=1; }
 # D) WATCH 生命周期三点 + TR 逐词
-timeout 200 env BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN BIOSRUN_WATCH=b0,b4 ./build/bleem_port --bios-run=90000 >/tmp/h107_w.log 2>&1
+timeout 200 env BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN BIOSRUN_NOCM=1 BIOSRUN_WATCH=b0,b4 ./build/bleem_port --bios-run=90000 >/tmp/h107_w.log 2>&1
 grep -q "pc=bfc042c4 -> gpa=b0 post=3c080000 step=79238" /tmp/h107_w.log && d1=1 || d1=0
 grep -q "pc=bfc0196c -> gpa=b0 post=0 step=79491" /tmp/h107_w.log && d2=1 || d2=0
-timeout 200 env BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN BIOSRUN_TRACE=79238,79243 ./build/bleem_port --bios-run=79300 >/tmp/h107_t.log 2>&1
+timeout 200 env BLEEM_BIOS=/home/gill/bleem/psxbios/SCPH1001.BIN BIOSRUN_NOCM=1 BIOSRUN_TRACE=79238,79243 ./build/bleem_port --bios-run=79300 >/tmp/h107_t.log 2>&1
 grep -q "TR 79243 pc=bfc042c4 insn=acc7fffc a0=a0000528 a2=b8 a3=250805e0" /tmp/h107_t.log && d3=1 || d3=0
 [ "$d1" = 1 ] && [ "$d2" = 1 ] && [ "$d3" = 1 ] && note "D) stub 生命周期(装载 79238/抹除 79491)+TR 逐词正确 实证" || { note "D) FAIL d1=$d1 d2=$d2 d3=$d3"; fail=1; }
 # E) 楔3 门回归 + final_check

@@ -18,8 +18,8 @@ jz=$(grep -c JUMPZERO /tmp/h108_cm.log || true)
 rom=$(grep -o "rom=[0-9]*" /tmp/h108_cm.log | cut -d= -f2)
 [ "${cs:-0}" -gt 100 ] && [ "$jz" = 0 ] && [ "${rom:-0}" -gt 500000 ] && note "C) CMEXP 实证 cm_skip=$cs JUMPZERO=0 rom=$rom(旧态 74089)" || { note "C) FAIL cs=$cs jz=$jz rom=$rom"; fail=1; }
 # D) 默认态零回归(不带开关, 旧漂移面保持)
-timeout 120 ./build/bleem_port --bios-run=200000 >/tmp/h108_def.log 2>&1
-grep -q "BISO_JUMPZERO step=80910" /tmp/h108_def.log && grep -q "rom=74089" /tmp/h108_def.log && note "D) 默认 OFF 面零回归(80910/74089 原位)" || { note "D) FAIL 默认面漂移"; fail=1; }
+timeout 120 env BIOSRUN_NOCM=1 ./build/bleem_port --bios-run=200000 >/tmp/h108_def.log 2>&1
+grep -q "BISO_JUMPZERO step=80910" /tmp/h108_def.log && grep -q "rom=74089" /tmp/h108_def.log && note "D) NOCM 显式面零回归(80910/74089 原位)" || { note "D) FAIL 默认面漂移"; fail=1; }
 # E) 门链回归
 if timeout 300 bash /home/gill/bleem/rewrite/tools/validate_host107.sh 2>&1 | grep -q "HOST107 CHECK PASS"; then note "E1) host107 回归 PASS"; else note "E1) FAIL"; fail=1; fi
 export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)

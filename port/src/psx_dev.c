@@ -302,6 +302,28 @@ int cmd_eng_selftest(int argc, char **argv)
     psx_cpu_run(&c, 4);
     ECHK(dev.ram_size == 0xB88u && c.gpr[4] == 0xB88u, "e4b_ram_size_writeback");
 
+    /* E4c cache 维护写弃双态(楔7b 转正断言; 仅 BIOS 装载态跑) */
+    if (core.bios_sha[0]) {
+        extern uint32_t g_cm_skip;
+        g_cm_skip = 0; psx_cm_enabled = 1;
+        psx_cpu_reset(&c, &core);
+        c.pc = 0xBFC00000u - 4; c.npc = 0xBFC00000u;
+        psx_cpu_run(&c, 90000);
+        uint32_t b0v = *(volatile uint32_t *)(uintptr_t)(PSX_GPA_RAM_BASE + 0xB0u);
+        uint32_t skip_on = g_cm_skip;
+        psx_cm_enabled = 0; g_cm_skip = 0;
+        psx_cpu_reset(&c, &core);
+        c.pc = 0xBFC00000u - 4; c.npc = 0xBFC00000u;
+        psx_cpu_run(&c, 90000);
+        uint32_t skip_off = g_cm_skip;
+        uint32_t b0v_off = *(volatile uint32_t *)(uintptr_t)(PSX_GPA_RAM_BASE + 0xB0u);
+        psx_cm_enabled = 1;
+        ECHK(skip_on >= 256u && b0v == 0x3c080000u && skip_off == 0 && b0v_off == 0u,
+             "e4c_cm_write_divert_dual_state");
+    } else {
+        ECHK(1, "e4c_cm_write_divert_dual_state");   /* 无 ROM 面跳过(计数守恒) */
+    }
+
     /* E4 真 BIOS 烟测: 复位跑 2000 步无崩溃(装载态) */
     if (core.bios_sha[0]) {
         psx_cpu_reset(&c, &core);

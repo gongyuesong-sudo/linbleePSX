@@ -28,6 +28,7 @@ static void enter_exception(psx_cpu_t *c, uint32_t excode, uint32_t badv, int ha
 }
 
 uint32_t g_watch_lo = 0, g_watch_hi = 0, g_watch_n = 0, g_cm_skip = 0;
+int psx_cm_enabled = 1;   /* 楔7b 转正: cache 维护写弃默认 ON; BIOSRUN_NOCM=1 或置 0 关 */
 #include <stdlib.h>
 int g_watch_post = 0; uint32_t g_watch_done_gpa = 0xFFFFFFFFu, g_watch_last_pc = 0;
 static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int store)
@@ -36,10 +37,11 @@ static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int stor
     uint32_t w;
     void *p = psx_translate(c->core, gpa, &w);
     if (!p || w == PSX_WIN_BAD) { enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
-    /* 楔5 实验: cache-maintenance 写弃(patch 面, BIOSRUN_CMEXP=1 启用)——
-     * BIOS 清零循环(pc 0xBFC01958-0xBFC01988)以 16B 步距扫 [0,0xF80) =
-     * D-cache 维护特征; 真机该写不改 RAM(或语义不同), 实验=对 RAM 低页写弃 */
-    if (store && getenv("BIOSRUN_CMEXP")) {
+    /* 楔7b 转正: cache-maintenance 写弃默认 ON——SCPH1001 维护循环
+     * (pc 0xBFC01940-0x1A40, 16B 步距扫 D-cache index 空间 [0,0xF80))对
+     * RAM 低页的写 = 真机 cache 层行为, 不毁 RAM 向量(golden stub 存活铁证);
+     * 本引擎无 cache 层 → 写落 blackhole = 语义对位。BIOSRUN_NOCM=1 显式关。*/
+    if (store && psx_cm_enabled) {
         uint32_t norm = gpa & 0x1FFFFFFFu;
         if (c->pc >= 0xBFC01940u && c->pc <= 0xBFC01A40u && norm < 0x1000u) {
             static uint32_t blackhole;
@@ -502,6 +504,7 @@ int psx_load_golden_vectors(psx_core_t *c, const uint8_t *g)
 #define HB 512
 int cmd_bios_run(int argc, char **argv)
 {
+    if (getenv("BIOSRUN_NOCM")) psx_cm_enabled = 0;
     if (getenv("BIOSRUN_WATCH")) {
         unsigned lo=0, hi=0; sscanf(getenv("BIOSRUN_WATCH"), "%x,%x", &lo, &hi);
         g_watch_lo = lo; g_watch_hi = hi; g_watch_n = 0;
@@ -621,7 +624,7 @@ int cmd_bios_run(int argc, char **argv)
             exc_seen++;
         }
     }
-    if (getenv("BIOSRUN_CMEXP")) printf("BISO_EV cm_skip=%u\n", g_cm_skip);
+    if (g_cm_skip) printf("BISO_EV cm_skip=%u\n", g_cm_skip);
     printf("BISO_EV steps=%u cycles=%u exc_total=%u pc=%x npc=%x v0=%x sp=%x ra=%x\n",
            n, c.cycles, c.exc_n, c.pc, c.npc, c.gpr[2], c.gpr[29], c.gpr[31]);
     printf("BISO_EV first cause=%x epc=%x insn=%08x\n", first_cause, first_epc, first_op);
