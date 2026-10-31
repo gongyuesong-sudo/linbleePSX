@@ -31,7 +31,7 @@ SHA-256: `b61ee13e2377e8305ede4e8be9752f83163368fadb19f0b3e40774d64e7e09da`
 | `rc/bleem.rc` | 版本信息资源 (与原版逐字一致) | 完整 |
 | `data/` | 原始 .rsrc 叶子 68 项 + payload.bin + stub.bin | 逐字节提取 |
 | `tools/` | 提取/拼接/资源 dump 脚本 | 可重复运行 |
-| `docs/` | 101 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
+| `docs/` | 102 篇阶段报告(索引见下)+ Evidence 台账 | 全部与 validator 锚定 |
 | `build/demo_rewrite.exe` | 交叉编译产物 (PE32 GUI, 与原版同类) | `make` 可复现 |
 
 ## 构建
@@ -87,7 +87,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 
 - **全工程终局(FINAL-SEAL-ALL, SESSION-113..118)**: 四战役封线后经用户选定收尾三连——AH 抢救(docs/86: `.analysis/` 金 harness 37 文件入 git+manifest+build_check 门)、总收官报告(docs/87: 中英双语人类读者版)、PE 薄引擎楔1-5(docs/88-92: port 内 PSX 引擎栈——骨架/fixed 原址+BIOS/MIPS 解释核/设备联动/中断链+GTE 最小面, 60 断言双态, 真 BIOS 2000 步无崩溃)全部交付; host99 全量终审 PASS: 工程态=可理解、可验证、文档齐备、全部结论带现场复跑门; 游戏内容运行归 DuckStation; 任何后续推进(薄引擎楔2-5/新战线)需用户显式指令。
 
-### docs 索引(101 篇=100 编号+台账, 按阶段)
+### docs 索引(102 篇=101 编号+台账, 按阶段)
 | 阶段 | 文档 |
 |---|---|
 | 静态逆向与解密 01-12 | 概览/引导桩/追加桩/UI/载荷/解密(金标准)/引擎图/API 派发/宿主/JIT 模板/模板图/真 BIOS 深区 |
@@ -143,7 +143,8 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 | PEw2 原址直置 `docs/89_port_thin_engine_w2` | fixed 三窗 MAP_FIXED_NOREPLACE 原址(0x80000000/0xBFC00000/0x1F800000 恒等)+BLEEM_BIOS 装载(硬失败三态不降级)+手算 SHA-256 与登记值逐字符互证; selftest 双态 31/31; 0 别名窗 mmap_min_addr 边界+c 优先级两坑固化 |
 | PEw3 MIPS 解释核 `docs/90_port_thin_engine_w3` | `port/src/psx_cpu` R3000A 整数核: 两段式延迟槽/地址错/syscall/eret/BEV 双向量 + 真 BIOS 0xBFC00000 首指令执行实证; 合成套件揪出槽后双跳环+lb 符号扩两核 bug; --cpu-selftest 14 断言双态 PASS |
 | PEw4 设备联动 `docs/91_port_thin_engine_w4` | `port/src/psx_dev`: H 战役真值语义表直接平移(I_STAT 写 AND 清/EVTGEN 64 读/GPUOK 0xB0/Timer 读推进 0x400 16 位回绕/1044-104A 双相位握手)+CPU MMIO 钩+GPU GP0 FIFO4+docs/41 rootcall 0x600/0x674 契约链 CPU×RAM×设备三面联动; --dev-selftest 8 断言 |
-| BMw8a GPU 前置侦察 `docs/100_bios_marathon_w8a` | **三反直觉实证**(默认转正态 2M 步): GPU 命令端口零读写(a000b068=RAM 参数块指针非 MMIO)/CDROM 命令寄存器零读(vblank 实已在 irq_check 静默运转, 195 步=A() 节拍); **卡点终判: 呈现面第一道门 = CDROM 驱动器 ready 应答缺失致 0x703C 等待死锁**; 楔8b 三段清单(①CDROM 最小应答 1 楔 ②GPU 命令/VRAM 2-3 楔 ③呈现接线 1-2 楔) |
+| BMw8a GPU 前置侦察 `docs/100_bios_marathon_w8a` | **三反直觉实证**: GPU 命令端口零读写(a000b068=RAM 参数块指针非 MMIO)/CDROM 零读/vblank 静默运转; 呈现依赖链定位 |
+| BMw8b1 精判楔 `docs/101_bios_marathon_w8b1` | **等待点再定位**: 30M 步正字窗(GPU+CDROM 0x1800-182F)零事件——楔8a"命令应答"表述修正为 **CDINT0 上电复位 ACK 中断缺失**(A(20) InitCD 已调已等; 主循环=转换+轮询+事件队列 drain 自洽; RAM dispatch/handler 表与 golden 逐字全等); CDROM 正字=0x1F801820-1827(0x1C00=expansion ROM 混称勘正); 外部核查: SCPH1001 无盘自动进 CD player 画面坐实; 楔8b-①实现清单定稿 | **三反直觉实证**(默认转正态 2M 步): GPU 命令端口零读写(a000b068=RAM 参数块指针非 MMIO)/CDROM 命令寄存器零读(vblank 实已在 irq_check 静默运转, 195 步=A() 节拍); **卡点终判: 呈现面第一道门 = CDROM 驱动器 ready 应答缺失致 0x703C 等待死锁**; 楔8b 三段清单(①CDROM 最小应答 1 楔 ②GPU 命令/VRAM 2-3 楔 ③呈现接线 1-2 楔) |
 | BMw7b 转正楔 `docs/99_bios_marathon_w7b` | **CMEXP 转正**: cache 维护写弃默认 ON(psx_cm_enabled; BIOSRUN_NOCM=1 显式关=历史取证面 80910 原位) + 三腿论证(16B 步距 D-cache 签名/golden stub 反证/行为收敛) + 泛化不可行入账(表拷贝含零字, 完整 cache 模型=GPU 同级工程收益 0) + eng E4c 双态断言 + host104-108 门锚迁 NOCM 面; **BIOS 战役七楔收束** |
 | BMw6a 全判读楔 `docs/98_bios_marathon_w6a` | **BIOS 健康主循环全判读+三勘正**: "0x2170 环"=正当堆 memset(非墙); "未触 CDROM"=混称勘正(主序 XA 0x1D80 系 x12 早已在账, 0x1C00 命令寄存器无盘态零访问=合法); "syscall 风暴"=A() 轮询正常载体(195 步节拍); **战役结论: CPU 侧可观测行为与真机语义对位, 再深=GPU 呈现(7-a)或收线** |
 | BMw5 突破楔 `docs/97_bios_marathon_w5` | **REGIMM 真 bug 修**(rs/rt 字段互换, 自测盲区五楔未测=教训"分支族必按正字测"; cpu 16 断言)+ **CMEXP cache 维护写弃实验**(16B 步距=DS cache index 特征; blackhole 实现坑: mem_rw 只交指针, 弃写必须重定向)+ **BIOS 无盘 idle 主循环会聚**(20M 步 rom=2.73M/ramlo=16.8M/dev 活跃/exc=88736 线性 195 步周期, 无漂移) |
@@ -158,7 +159,7 @@ make payload    # 实验: 重建 loader + 原版追加区拼接 (布局对照, �
 - port 全量: `cd ../port && bash tools/final_check.sh` → FINAL CHECK PASS(需 DISPLAY 或走 validate_host44 自取 cookie)
 - 解压器对拍: `bash tools/native_unpack/build_selftest.sh` 三流逐字节 PASS; 文档: `python3 tools/validate_decomp.py`, `bash tools/validate_map.sh`
 - H 系列锚定 validator 序列 host7..host52(近期): host46(Vulkan 双代硬件实证), host47(帧 ABI+线程栈窗),
-  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚), host86(二段图谱锚), host87(解包链会师锚), host88(s3 真身+零漂移锚), host89(服务表 ABI 锚), host90(映射构造器+否证锚), host91(静态封顶锚), host92(Win16 API+wine 边界锚), host93(native 终验+收官条件锚), host94(x86 封线七判终审), host95(AH 抢救门), host97(总报告门; host96 编号未用), host98(薄引擎骨架门), host99(FINAL-SEAL-ALL 全量终审), host100(薄引擎楔2 门), host101(薄引擎楔3 MIPS 核门), host102(薄引擎楔4 设备联动门), host103(薄引擎楔5 收官门), host104(BIOS 长跑战役楔1 门), host105(BIOS 战役楔2 勘正门), host106(BIOS 战役楔3 诊断门), host107(BIOS 战役楔4 侦察门), host108(BIOS 战役楔5 突破门), host109(BIOS 战役楔6a 全判读门), host110(BIOS 战役楔7b 转正门), host111(BIOS 战役楔8a GPU 前置侦察门)——注: host75 编号未用
+  host48(H_TFR 回灌+零回归), host49(契约 44cmd), host50(50/50 handler 完备), host51(A 表归名), host52(金标态直跑活性), host53(可转发核 26/50 双态一致), host54(fwd API 核 26/26 验收), host55(ctx 分型+批次态依赖实证), host56(早期窗同态+表补否证复算), host57(waiter 分族+深推进复测), host58(0x19 SPB 单事件+语境复算), host59(队列布局+suspend 字段词级复算+FWDTcb 恒定门), host60(毒值跟随+ra 钉死+TCB 回写三层阻力复算),  host61(设备三件零增益门+epilogue 墙), host62(出口钩转化+假阳性门+批次态恒定), host63(封账审计: 状态一致+port final_check+关键回归抽验), host64(H-26 零出口转化集+假阳性门+迁移回归), host65(深度门防腐+分型锚), host66(表槽否证四组合+0x10C 形态锚), host67(设备真装四段链+形态剧变+假阳性门), host68(Timer 热点+生命周期锚), host69(楔3 状态机/create 双否证锚), host70(magic 否证+绿色线程证据锚), host71(MIPS JIT 码判定锚), host72(终封七判审计), host73(A3 主运行停滞锚), host74(宿主桥+亿块跑穿里程碑锚), host76(僵尸环三柱+反指标锚), host77(活现场双源+中断服务表锚), host78(ra 归零全链+死帧根因锚), host79(真起点+首道设备墙锚), host80(HOSTRET 完成段+假阳性门锚), host81(多段回放节拍锚), host82(段间注入全否锚), host83(A3 终判封线审计), host84(x86 侦察基线锚), host85(两级 stub 锚), host86(二段图谱锚), host87(解包链会师锚), host88(s3 真身+零漂移锚), host89(服务表 ABI 锚), host90(映射构造器+否证锚), host91(静态封顶锚), host92(Win16 API+wine 边界锚), host93(native 终验+收官条件锚), host94(x86 封线七判终审), host95(AH 抢救门), host97(总报告门; host96 编号未用), host98(薄引擎骨架门), host99(FINAL-SEAL-ALL 全量终审), host100(薄引擎楔2 门), host101(薄引擎楔3 MIPS 核门), host102(薄引擎楔4 设备联动门), host103(薄引擎楔5 收官门), host104(BIOS 长跑战役楔1 门), host105(BIOS 战役楔2 勘正门), host106(BIOS 战役楔3 诊断门), host107(BIOS 战役楔4 侦察门), host108(BIOS 战役楔5 突破门), host109(BIOS 战役楔6a 全判读门), host110(BIOS 战役楔7b 转正门), host111(BIOS 战役楔8a GPU 前置侦察门), host112(BIOS 战役楔8b1 精判门)——注: host75 编号未用
 - harness 状态: `harness-tasks.json`(103 任务全终态 90✓/13✗, AH 战线进行中另记) + `harness-progress.txt`(SESSION-1..115); x86 封线审计=validate_host94(七判: 动态终态/docs/取证工件/抽验/port 终跑); AH 抢救门=host95; 历史审计=host83/72/63
 
 ### 发布镜像
