@@ -38,7 +38,7 @@ PYEOF
 n=$(grep -cE '^\| 0x[0-9a-f]{2} \| 0x[0-9a-f]{2} \|' docs/46_cmd_handlers.md)
 [ "$n" -eq 50 ] && grep -q "50/50 全非零" docs/46_cmd_handlers.md && grep -q "完备性实证" docs/46_cmd_handlers.md \
   && note "C) docs/46 表 $n 行+锚齐" || { note "C) FAIL 表行=$n"; fail=1; }
-d=$(ls docs/*.md | wc -l); grep -q "46_cmd_handlers" README.md && [ "$d" -eq 47 ] \
+d=$(ls docs/*.md | wc -l); grep -q "46_cmd_handlers" README.md && [ "$d" -eq 48 ] \
   && note "D) README 索引与 docs=$d 一致" || { note "D) FAIL docs=$d README 锚"; fail=1; }
 [ $fail -eq 0 ] && echo "HOST50 CHECK PASS" || echo "HOST50 CHECK FAIL"
 [ $fail -eq 0 ]

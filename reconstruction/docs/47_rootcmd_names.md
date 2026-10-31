@@ -1,0 +1,68 @@
+# 47 — M-5 rootcall 全量归名表（task-061，SESSION-70）
+
+对 docs/46 的 50 个 BIOS 侧 handler 做**证据式归名**（不引入外部文献命名）：
+
+- **A 表锚**：handler 入口与 ROM+0x4300 的 A(0..43) 表逐槽相等（docs/14 §1 正表，实测 A10/A19/A38 与锚一致）；
+- **docs/41 语义锚**：冷链到达窗已证语义（NewRootCmd/open/close/printf-TTY 等）；
+- **形态分类**：金标 RAM 前 10 词静态形态。
+
+锚定率 **14/50**；其余 36 项给形态不给杜撰名——诚实终判：**纯静态可达的归名上限已到**，
+深 cmd 真名需运行时 census（H_CMDW 扩窗）或 H-25 实施期按 ABI 逐个点亮。
+
+| vec | cmd | handler | A表锚 | 已证语义 | 形态 | 序言(前3指令) |
+|---|---|---|---|---|---|---|
+| 0xa0 | 0x0e | 0xbfc02918 | A(14) | — | 转发(jal) | jal 0x00002e00; addiu a0,zero,0x1; lui a0,0x0 |
+| 0xa0 | 0x13 | 0xbfc02240 | A(19),docs14 A19 锚 | — | 读表 | lw t8,a2,0x4; lw t9,a2,0x0 |
+| 0xa0 | 0x15 | 0xbfc03190 | A(21) | — | 转发(jal) | sll t1,t1,4; addu t2,s1,t1; sltu at,s0,t2 |
+| 0xa0 | 0x16 | 0xbfc03200 | A(22) | — | 叶函数 | lb t6,a0,0x0; addiu v0,zero,0x20; bne v0,t6,0x5 |
+| 0xa0 | 0x17 | 0xbfc03288 | A(23) | — | 叶函数 | sw s1,sp,0x30; sw zero,s3,0x0 |
+| 0xa0 | 0x18 | 0xbfc03310 | A(24) | — | 叶函数 | lb t3,t2,0x1; andi t4,t3,0x4 |
+| 0xa0 | 0x19 | 0xbfc033c8 | A(25) | — | 转发(jal) | lui a0,0x0; lui a1,0x0; sw a2,sp,0x18 |
+| 0xa0 | 0x1b | 0xbfc03494 | A(27) | — | 读表 | lw v0,t6,0x4; andi v0,v0,0x2 |
+| 0xa0 | 0x28 | 0xbfc01acc | A(40) | — | 转发(jal) | addiu a1,zero,0x4000; beq zero,zero,0x1 |
+| 0xa0 | 0x2a | 0xbfc02b50 | A(42),docs14 A42 libc | — | 转发(jal) | addiu t7,zero,0x9; lui at,0x1 |
+| 0xa0 | 0x2f | 0xbfc02200 | — | — | 读表 | lui a2,0x0; lw a2,a2,0x6d40 |
+| 0xa0 | 0x33 | 0xbfc01e5c | — | — | 读表 | addu v0,t6,t7; lw t8,v0,0x4; addiu a1,zero,0x4000 |
+| 0xa0 | 0x34 | 0xbfc020f0 | — | — | 转发(jal) | sw ra,sp,0x14; sll t7,t7,6; addiu a0,zero,0x3 |
+| 0xa0 | 0x39 | 0xbfc01e24 | — | — | 设备访问 | lui t6,0xa000; lw t6,t6,0x120; subu t7,t7,a0 |
+| 0xa0 | 0x3f | 0xbfc018e0 | — | — | 读表 | lw t8,v0,0x0; andi t9,t8,0x1 |
+| 0xa0 | 0x49 | 0xbfc03fac | — | — | 读表 | lw t2,v1,0x0; addiu at,zero,0xfffd; and t3,t2,at |
+| 0xa0 | 0x70 | 0xbfc09914 | — | — | 叶函数 |  |
+| 0xa0 | 0x72 | 0xbfc072b8 | — | — | 叶函数 | f2d at,zero,zero; cop1 s0,t2,0x5954; .word 0x55203a20 |
+| 0xa0 | 0xa1 | 0xbfc0d950 | — | — | 叶函数 |  |
+| 0xa0 | 0xab | 0xbfc0c0dc | — | — | 叶函数 |  |
+| 0xa0 | 0xad | 0xbfc0c1dc | — | — | 叶函数 |  |
+| 0xb0 | 0x07 | 0x00001b44 | close/open(docs41) | close/open(docs41) | 设备访问 | lui t6,0xa000; lw t6,t6,0x124; addiu at,zero,0x1c |
+| 0xb0 | 0x08 | 0x00001d8c | close/open(docs41) | close/open(docs41) | 设备访问 | addiu sp,sp,0xffd0; sw ra,sp,0x24; lui v1,0xa000 |
+| 0xb0 | 0x09 | 0x00001e1c | — | — | 设备访问 | andi a0,a0,0xffff; sll t7,a0,3; lui t6,0xa000 |
+| 0xb0 | 0x0b | 0x00001ec8 | — | — | 设备访问 | andi a0,a0,0xffff; sll t7,a0,3; lui t6,0xa000 |
+| 0xb0 | 0x0c | 0x00001f10 | del/read-write(docs41) | del/read-write(docs41) | 设备访问 | andi a0,a0,0xffff; sll t7,a0,3; lui t6,0xa000 |
+| 0xb0 | 0x12 | 0x00004ac8 | printf(docs41 TTY) | printf(docs41 TTY) | 转发(jal) | addiu sp,sp,0xffe0; sw a1,sp,0x24; sw a0,sp,0x20 |
+| 0xb0 | 0x13 | 0x00004b90 | — | — | 转发(jal) | addiu sp,sp,0xffe8; sw ra,sp,0x14; jal 0x000043e8 |
+| 0xb0 | 0x14 | 0x00004c10 | — | — | 转发(jal) | addiu sp,sp,0xffe8; sw ra,sp,0x14; jal 0x00006b80 |
+| 0xb0 | 0x15 | 0x0000609c | — | — | 转发(jal) | addiu sp,sp,0xffe0; lui at,0x1000; sw ra,sp,0x1c |
+| 0xb0 | 0x16 | 0x000061c4 | — | — | 读表 | lui v1,0x0; lw v1,v1,0x74c4; addiu t6,zero,0xffff |
+| 0xb0 | 0x17 | 0x00000f40 | — | — | 读表 | addiu k0,zero,0x100; lw k0,k0,0x8 |
+| 0xb0 | 0x19 | 0x00000f20 | — | — | 叶函数 | lui at,0x0; jr ra; sw a0,at,0x75d0 |
+| 0xb0 | 0x20 | 0x00001c5c | — | — | 设备访问 | lui t6,0xa000; lw t6,t6,0x124; addiu at,zero,0x1c |
+| 0xb0 | 0x32 | 0x00002958 | — | — | 转发(jal) | addiu sp,sp,0xffc8; sw ra,sp,0x1c; sw a0,sp,0x38 |
+| 0xb0 | 0x34 | 0x00002b28 | — | — | 转发(jal) | addiu sp,sp,0xffd8; sw ra,sp,0x1c; sw a1,sp,0x2c |
+| 0xb0 | 0x35 | 0x00002c94 | — | — | 转发(jal) | addiu sp,sp,0xffd8; sw ra,sp,0x1c; sw a1,sp,0x2c |
+| 0xb0 | 0x36 | 0x00002e00 | — | — | 读表 | addiu sp,sp,0xffd8; sw a0,sp,0x28; sw ra,sp,0x1c |
+| 0xb0 | 0x42 | 0x000039a4 | — | — | 读表 | lui v1,0x0; lw v1,v1,0x7480; addiu sp,sp,0xffd0 |
+| 0xb0 | 0x43 | 0x00003a70 | — | — | 读表 | addu a1,a0,zero; lui a0,0x0; lw a0,a0,0x7480 |
+| 0xb0 | 0x44 | 0x00003aac | — | — | 转发(jal) | addiu sp,sp,0xffb0; sw ra,sp,0x24; sw s0,sp,0x20 |
+| 0xb0 | 0x45 | 0x00003744 | — | — | 转发(jal) | addiu sp,sp,0xffc8; sw ra,sp,0x1c; jal 0x00003060 |
+| 0xb0 | 0x46 | 0x00003810 | — | — | 转发(jal) | addiu sp,sp,0xffc8; sw ra,sp,0x1c; jal 0x00003060 |
+| 0xb0 | 0x4a | 0x00005da8 | — | — | 转发(jal) | addiu sp,sp,0xffe0; sw ra,sp,0x1c; jal 0x00004a94 |
+| 0xb0 | 0x4b | 0x00004c70 | — | — | 转发(jal) | addiu sp,sp,0xffe8; sw ra,sp,0x14; jal 0x000043e8 |
+| 0xb0 | 0x50 | 0x00004d3c | — | — | 叶函数 | addiu t6,zero,0x1; lui at,0x0; jr ra |
+| 0xb0 | 0x5b | 0x000043d0 | — | — | 读表 | lui v1,0x1; lw v1,v1,0x8914; lui at,0x1 |
+| 0xc0 | 0x02 | 0x00001420 | — | — | 设备访问 | lui t6,0xa000; lw t6,t6,0x100; sll t7,a0,3 |
+| 0xc0 | 0x03 | 0x00001444 | — | — | 设备访问 | lui t6,0xa000; lw t6,t6,0x100; sll t7,a0,3 |
+| 0xc0 | 0x0a | 0x000015d8 | — | — | 叶函数 | lui t7,0x1; addiu t7,t7,0x8600; sll t6,a0,2 |
+
+## 终判
+- 归名面闭环: A 表(44 槽 BIOS 服务表)与 rootcall 三族表是**同一 ROM 服务的三种安装视图**——10 个 0xA0 槽与 A(n) 直接等值即证。
+- H-25 输入链完备: docs/41(ABI+最小集)→43(帧)→45(范围)→46(入口)→47(A 表对应+形态)。
+- 下一步只能是运行时面: H_CMDW 扩窗把 26→44 的窗补齐(需链更深), 属 H-25 范围内工作。
