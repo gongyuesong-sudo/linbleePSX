@@ -20,5 +20,7 @@ ROM=/home/gill/bleem/psxbios/SCPH1001.BIN
 H_JZSLED=1 H_C2HOME=1 H_C2GOLD=1 H_C2END=0x89E00 H_DEVRST=1 H_DEVRST2=1 H_JITUNIQ=1 H_LOOPREP=3000000 H_MAXB=8000000 HTRACE_LOG=/tmp/h42.log H_ARENA_MB=320 H_SLED_CAP=200 H_BIOSJIT=1 H_BIOSEXN=1 H_JIT_BUDGET=10000000 BLEEM_BIOS=$ROM timeout 600 ./host/build/htrace decrypted/stream_10a4c_L71cbf_relocated.bin 0x400000 0x472000 >/dev/null 2>&1
 grep -qa "EMITFAIL pc=00001014 op=42000010" /tmp/h42.log && grep -qa "BIOS-JIT-CHAIN blocks=" /tmp/h42.log && note "C) halt 现场可复现(0x1014) OK" || { note "C) halt FAIL"; fail=1; }
 grep -qa "EXN cmd=1 epc=" /tmp/h42.log && grep -qa "sp=" /tmp/h42.log && note "E) EXN 诊断字段 OK" || { note "E) EXN 字段 FAIL"; fail=1; }
+grep -q "RAW31" host/mips_jit.c && grep -q "jalrz_init" host/mips_jit.c \
+  && grep -q "bfc06ed4" docs/37_ra4_seed.md && grep -q "全链仅发生一次" docs/37_ra4_seed.md && note "F) RAW31 机制 + §5 定样 OK" || { note "F) FAIL"; fail=1; }
 [ "$fail" -eq 0 ] && echo "HOST42 CHECK PASS" || echo "HOST42 CHECK FAIL"
 [ "$fail" -eq 0 ]
