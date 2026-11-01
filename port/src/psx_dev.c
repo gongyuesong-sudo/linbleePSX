@@ -414,6 +414,19 @@ void psx_dev_vframe(psx_dev_t *d)
             uint32_t tv = 0u;
             memcpy(q, &tv, 4);
         }
+        /* 楔43 实验(RETAIL_CDSTAT=1 门控): CD 驱动状态块 state 槽 [80076D9C]
+         * 真机=BIOS CD 回调 init 置 1(RWATCH: 本核 8M 内仅 init 8006080c 写 0,
+         * 1 的写方=BIOS 依赖面)。本体门 80060974 需 state==1。 */
+        {
+            const char *cs = getenv("RETAIL_CDSTAT");
+            if (cs && cs[0] == '1') {
+                void *q3 = psx_translate((const psx_core_t *)d->core, 0x80076D9Cu, &bw);
+                if (q3 && bw == PSX_WIN_RAM) {
+                    uint32_t one = 1;
+                    memcpy(q3, &one, 4);
+                }
+            }
+        }
         /* 楔36 转正(楔33/35 实证): 真机 BIOS EntryInt 派发面置 ISR-active
          * [800750C2]=1, 游戏 VBlankIntCB(8005202C) 退出清零; 本核中断派发不经
          * BIOS EntryInt 面 → 该标志无人置, 主泵门永 0。转正=VBlank 派发入口等价
