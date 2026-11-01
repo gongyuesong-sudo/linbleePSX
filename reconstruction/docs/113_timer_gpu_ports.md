@@ -329,3 +329,23 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   0xE00 → 万发风暴 → no-op 政策面保留(号义待钉)。
 - 诊断面: TRAP near[a0/v0+] 指针邻域 dump; RPFIRE/RPENQ/CLRRCNT 打点(RETAIL_RPTRACE 门控)。
 - 回归面: 八面 118P/0F; 北斗神拳 600M/三国志2 200M/打击者 200M/NBA 200M 全基线; 窗口 hw=1。
+
+## 楔21 (SESSION-160): LIBSN idle 语义 + 链火全帧保护 — 北斗神拳脱离死环进内核派发
+- LIBSN idle 正字假设 [P] (RETAIL_IDLEIE 门控): WaitEvent 无就绪事件=内核空闲态 → 置 IE=1
+  停等中断(真机 halt-with-IE 语义)。**效果钉死**: 主线程首次脱离 8003F530 死环, 经 RFE 派发
+  (IRQDBG->RFE 80051e10 帧已存) 进入内核派发调用链(终态 pc=8005112C, 旧基线恒 8003F53C)。
+- hook 槽演化实证派发器真跑过: [800750F8] 从 0x80051E11(首装 odd+1) → 0x80051E10(dispatcher
+  消费后自更新) = LIBSN entry dispatcher 至少完整执行一遍。
+- 链火(链 #2=**线程就绪链**非 C 回调链, 翻案楔20): func=80065270=ProcessEntry 派发体
+  (首条 lbu $a0,($s2) → PCB 经 $s2 传入, LIBSN 内部 ABI 非常规 a0)。
+- fire 两大翻案(实验钉字): ①tick 镜像彻底撤销——[80075050]/[80075054] **都是**游戏自写 MMIO
+  指针(T1=1F801110), 写计数值=毁指针→lw [2] address error 万发风暴; ②fire 必须全 32 寄存器
+  +cop0 保存恢复(只存 ra 毁主线程 s2/s3/s5 索引=cause10×51105 风暴; 全帧后 exc 51105→2)。
+- fire 内时钟泵: 每 64 步 c->cycles+=564456/16 + psx_dev_sync(handler 内自带 T1 tick 等待环)。
+- ProcessEntry done=0 定性: LIBSN 线程体**不返回**(挂起=ChangeThread), tramp 返回检测永不命中
+  → 链火转正需要完整 PCB 上下文切换内核模型(每线程专属栈 807ffxxx + sp/ra/s0-s7 保存区)= 楔22 战役。
+- 8005FAF0 计数器第二写者 = 内核 init 批量清零环(swarms sw $zero 43a0/43a4/43a8+8×N), 非递增者。
+  真递增者=dispatcher vsync 分支(待其完整跑通后自然出现)。
+- 门控矩阵(全默认关): RETAIL_IDLEIE(WaitEvent 开 IE) / RETAIL_RFE(hook RFE 派发, 维持) /
+  RETAIL_RP(链火) / RETAIL_RPTRACE(fire 打点)。默认面八面 118P/0F + 四盘基线不动。
+- 三合一最优实验组合(留下楔转正候选): RETAIL_RFE=1 RETAIL_IDLEIE=1 → 主线程进派发链无风暴。

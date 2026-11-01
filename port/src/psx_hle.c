@@ -385,6 +385,15 @@ static uint32_t hb_wait_event(psx_hle_t *h, uint32_t cmd)
     if (s < 0) { V0(-1); return 0; }
     if (!h->ev[s].fired && h->dev && (((psx_dev_t *)h->dev)->i_stat & 1u) && getenv("RETAIL_RP"))
         psx_hle_sysrp_fire(h);   /* 楔20 同一实验门控 */
+    if (!h->ev[s].fired) {
+        /* 楔21 LIBSN idle 正字假设 [P]: 线程等事件=本线程睡眠; 若全体事件均未
+         * fired → 内核空闲态 = 真机开 IE 停等中断(rfe 语义前提)。
+         * 北斗神拳主线程 IE=0 死轮询 [800D43A8] 而递增者需 IRQ 到达 = 死锁环。 */
+        int any_ready = 0;
+        for (uint32_t z = 0; z < HLE_EV_MAX; z++)
+            if (h->ev[z].class != 0xFFFFFFFFu && h->ev[z].fired) { any_ready = 1; break; }
+        if (!any_ready && getenv("RETAIL_IDLEIE")) h->cpu->cop0[12] |= 1u;
+    }
     h->ev[s].fired = 0; V0(0); return 0; }
 static uint32_t hb_test_event(psx_hle_t *h, uint32_t cmd)
 { (void)cmd; int s = ev_slot(h, A_P(0)); V0(s >= 0 ? (uint32_t)h->ev[s].fired : 0); return 0; }
@@ -1515,9 +1524,6 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
     h->vblank_ticks++;                       /* 每 VBlank 一拍(镜像与回调共用) */
     uint32_t head = h->sysrp[2];
     if (head < 0x80000000u) {                /* 空链也要维护 tick 镜像 */
-        { extern int g_hle_tick_mirror;
-          if (g_hle_tick_mirror)
-              hle_wr32(h, 0x80075050u, (((psx_dev_t *)h->dev)->timer_cnt[1] & 0xFFFFu)); }
         return;
     }
     psx_cpu_t *c = h->cpu;
@@ -1528,6 +1534,10 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
     uint32_t save_pc = c->pc, save_npc = c->npc;
     int save_pend = (int)c->branch_pending; uint32_t save_tgt = c->branch_target;
     uint32_t save_ra = c->gpr[31];
+    uint32_t save_gpr[32];
+    for (int gz = 0; gz < 32; gz++) save_gpr[gz] = c->gpr[gz];   /* 楔21: 全帧保护
+        * (fire 直调内核派发体绕过其自存路径, 只恢复 ra 会毁主线程 s2/s3/s5 索引 → cause10 风暴) */
+    uint32_t save_cause = c->cop0[13], save_epc = c->cop0[14], save_st = c->cop0[12];
     hle_wr32(h, tramp, 0x03E00008u);
     hle_wr32(h, tramp + 4u, 0u);
     int guard = 0;
@@ -1538,12 +1548,21 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
         uint32_t next = hle_rd32(h, head + 8u);
         if (func >= 0x80000000u && func < 0x88000000u) {
             c->gpr[4] = pcb; c->gpr[31] = tramp;
+            c->gpr[18] = head;   /* 楔21: 80065270 派发体活体反汇编 = 首条 lbu $s2,($s2)
+                                  * → PCB 经 $s2 传入(LIBSN 内部 ABI, 非常规 a0) */
             c->branch_pending = 0;
             c->pc = tramp; c->npc = func & ~3u;
             int done = 0;
-            for (uint32_t st = 0; st < 400u; st++) {
+            /* 楔21: handler 内部有 T1 tick 等待环(80051a04 活体钉字) →
+             * fire 内必须同步推进设备 tick/帧(= mini-scheduler, 不碰主线程上下文) */
+            for (uint32_t st = 0; st < 4000u; st++) {
                 psx_cpu_step(c);
                 if (c->pc == tramp && c->npc == tramp) { done = 1; break; }
+                if ((st & 63u) == 63u && h->dev) {
+                    /* 时钟纯函数模型: 推 CPU 主钟 → dev sync 折叠 T1/IRQ (每拍 564456) */
+                    c->cycles += 564456u / 16u;
+                    psx_dev_sync((psx_dev_t *)h->dev);
+                }
             }
             if (getenv("RETAIL_RPTRACE")) {
                 fprintf(stderr, "RPFIRE node=%08x func=%08x done=%d pc=%08x npc=%08x ra=%08x\n",
@@ -1559,12 +1578,11 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
     /* 楔20 tick 镜像: 北斗神拳 libsn 读 [80075050]/[80075054] RAM 计数对
      * (稳定双读+差值 pacing 实证 80051a04 环)。真机=BIOS vsync 服务递增该
      * 镜像(MMIO T1 的 RAM 影子)。门控=盘曾写 tick 页 0x800750xx(跨盘防误触)。 */
-    { extern int g_hle_tick_mirror;
-      /* [80075054] 是游戏自写的 tick 源指针(80051b14 lw 后 deref 实证, 楔20
-       * 覆写=毁指针 cause10 翻案) → 镜像只落 [80075050]=T1 硬件计数影子 */
-      if (g_hle_tick_mirror)
-          hle_wr32(h, 0x80075050u, (((psx_dev_t *)h->dev)->timer_cnt[1] & 0xFFFFu)); }
-    c->pc = save_pc; c->npc = save_npc; c->gpr[31] = save_ra;
+    /* 楔21 彻底撤销 tick 镜像: [80075050]/[80075054] 皆为游戏自写的 MMIO 指针
+     * (lw 后 deref 实证), 写计数值=毁指针 address error。T1 MMIO 读已正确。 */
+    c->pc = save_pc; c->npc = save_npc;
+    for (int gz = 0; gz < 32; gz++) c->gpr[gz] = save_gpr[gz];
+    c->cop0[13] = save_cause; c->cop0[14] = save_epc; c->cop0[12] = save_st;
     c->branch_pending = (uint32_t)save_pend; c->branch_target = save_tgt;
     g_hle_depth--;
 }
