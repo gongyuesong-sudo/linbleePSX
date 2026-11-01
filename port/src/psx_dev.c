@@ -419,6 +419,14 @@ void psx_dev_vframe(psx_dev_t *d)
          * 1 的写方=BIOS 依赖面)。本体门 80060974 需 state==1。 */
         {
             const char *cs = getenv("RETAIL_CDSTAT");
+            if (cs && cs[0] == '3') {   /* 楔53: BIOS 完成面等价=仅当游戏已置 2(SETUPOK)
+                                         * 才补 1(ready), 不毁 INIT 前状态 = 命令完成语义 */
+                void *q2 = psx_translate((const psx_core_t *)d->core, 0x80076D9Cu, &bw);
+                if (q2 && bw == PSX_WIN_RAM) {
+                    uint32_t st = 0; memcpy(&st, q2, 4);
+                    if (st == 2u) { uint32_t one = 1u; memcpy(q2, &one, 4); }
+                }
+            }
             if (cs && cs[0] == '1') {
                 void *q3 = psx_translate((const psx_core_t *)d->core, 0x80076D9Cu, &bw);
                 if (q3 && bw == PSX_WIN_RAM) {

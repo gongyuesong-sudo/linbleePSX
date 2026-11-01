@@ -1484,6 +1484,8 @@ int cmd_retail_probe(int argc, char **argv)
         if (wpc_target != 0xDEADBEEFu) printf("RETAIL_PROBE wpc_%05x hits=%u\n", wpc_target, wpc_hits);
         printf("RETAIL_PROBE ran=%u served=%u unknown=%u exc=%u cause=%x epc=%x pc=%08x npc=%08x\n",
            done, h.nlog, h.unk_n, cpu.exc_n, cpu.cop0[13], cpu.cop0[14], cpu.pc, cpu.npc);
+    printf("RETAIL_PROBE savedpc pc=%08x npc=%08x ctx=%d\n",
+           cpu.saved_pc, cpu.saved_npc, cpu.ctx_saved);  /* 楔53: 主线程真身位 */
     {   /* 首异常现场: badv + epc 指令窗 + 关键寄存器 (task-142 死环钉字) */
         uint32_t wwz;
         printf("RETAIL_EXC badv=%08x regs v0=%08x v1=%08x a0=%08x a1=%08x t0=%08x t1=%08x t2=%08x sc=%x ra=%08x sp=%08x\n",

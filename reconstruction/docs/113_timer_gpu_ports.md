@@ -877,3 +877,22 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   guest pc+val) 是本战役写者取证金标准, 完胜 RWATCH/WPC。
 - 楔53 目标: 钉 issuer 为何仅一次(609F8/60AC0 caller 链活体) + 命令完成面
   (60EE0 完成处理器)触发条件; 八面 8/8 保持, 临时诊断面全撤树净。
+
+## 楔53 (SESSION-191): 主门真身钉死=63D88 等 state==1；CDSTAT=3 命令完成面等价破闸
+- saved_pc 打印转正(PROBE ran 后新增 savedpc 行): 主线程真身=**8003F3E8**(ctx=1)，
+  旧 pc=51E0C 只是派发面假象。
+- 主门正字: 体环 `3F3EC jal 80063D88`+`beq v0,1`；`63D88` 入口 **`move a0,zero`
+  丢弃caller参数**(GATE a0=0x20 是 caller 侧旧值)→ `60974(0)` 读 `[76D9C]`，
+  须 ==1 且 `[D43A8]>0`(现 4✓) 才返 1。state=2(InitCdSys 置, 全史唯一写)→返 2 永等。
+- **CDSTAT=2 证伪**: 恒注 `[76DE4]=1` 零效果(门不读该槽)。
+- **CDSTAT=3 破闸实锤**: 门控注入(仅当 [76D9C]==2 补写 1=BIOS 命令完成等价)→
+  savedpc 8003F3E8→**800457C8** 游戏本体大步前移。残留首爆 cause=28 写 801F0000,
+  ra=80063DB4, **SP=807FFF08(8MB 顶越界)**——破闸后消费路(疑 GETSTAT 结果/栈基)
+  实态缺口=楔54。
+- CD 命令链全图(本楔补完): issuer `60A38` 写 CWD(命令字节[76D80]/参数[76D88]/
+  计数[76DC0]=30×state超时表[76DD0+st*4])；泵 `60C10` 仅 count==1 jal `60EE0`
+  完成器；`60EE0` jal `50E60`(**非 CD 命令口**——其引用 GPU CWD [74D38]/[74D54]/
+  [74F74], ISSUE 3 发 caller=60F50 渲染路)。CD 命令真执行=BIOS VBlank 消费 CWD 面,
+  本核零 BIOS → state 永停 2 根因链完整。
+- 楔54 计划: 钉 SP=807FFF08 出处(装载/spawn 路) + GETSTAT 结果面(CWD+0xC 状态缓冲)
+  最小真语义; 八面 8/8, 默认基线逐字不变(savedpc=3F3E8 复证), 三盘零误伤。
