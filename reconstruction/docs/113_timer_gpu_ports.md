@@ -66,3 +66,20 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   **值猎手已落已跑**(每帧全镜像扫 0x94639271/9463941B): **零命中 = 该值从未写入 RAM** =
   v1 是纯寄存器算术产物(lui/ori 或坏指针算术)。下楔=静态反汇编 587B8 函数序言找 v1 首赋,
   画数据流钉生产者(跨会话语义楔, HUNT 面保留在探针内)。
+
+## SESSION-144 追加 (楔 6 — CPU 级大正字)
+- **JAL ra 错位钉死**(本战役最深 bug): 旧 `ra=延迟槽地址` → `jr $ra` 返回**重放调用者
+  延迟槽** → 子程序毁 v0 后槽位带毒重执行 → 零售盘 EXC 风暴 **7712→2**。真机 MIPS
+  ra=延迟槽后一条(npc+4)。JALR/BGEZAL/BLTZAL/向量劫持同修 4 处。
+  教训入钉: 自造夹具槽位全是幂等 SW, 长期掩盖; p4 断言曾把错误约定钉死, 已随正字更新。
+- **冷启交棒态正字**: cop0[12] IE=1/EXL=0(RETAIL_IRQT 实证: 游戏 mask=0x000D 开 vsync、
+  i_stat bit0 已置, 但 IE=0 = BIOS 交棒态缺失死等; 真机 BIOS eret 进 EXE 时 IE=1)。
+- **B0 CARD 族 [S]**(PSn00bSDK stubs.json drivers.s 正名: InitCARD 0x4A/StartCARD 0x4B/
+  StopCARD 0x4C/_card_write 0x4E/_card_read 0x4F/_new_card 0x50; 传输原语诚实 -1)。
+- **0x80 通用 rootcall 入口**: t2=0x80 且 t1∈0x20-0x3F → sysvec handler 劫持(ra=槽后)。
+- **静态反汇编工作流**: RETAIL_EXCD(epc±4K RAM dump)+capstone 钉出真槽=**0x8006FA90**
+  (lui 0x8007-0x570, 此前差一页 0x8007FA90 系位段误读), [6FA90]运行时=1F801814=GP0 口
+  (描述符合法指向 GPU); HOT 桶打印截位 bug 教训(00b750 实为 0x8005b750)。
+- **现状**: 真盘 60M 周期=1063 帧全跑, unknown=0, exc=2 一次型(待追, a1=1F801110 Timer
+  指针相关 store), **GPU 空闲(gp0=5)**=游戏停 in SPU 混音例程不上画 — 下楔=钉游戏主循环
+  等什么([s0+0x32] 声部字段/0x1DAA 状态位读回语义) + 一次性 cause=20 现场。

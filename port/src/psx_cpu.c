@@ -145,7 +145,7 @@ int psx_cpu_step(psx_cpu_t *c)
         case 0x06: SETG(rd, G(rt) >> (G(rs) & 31)); break;
         case 0x07: SETG(rd, (uint32_t)((int32_t)G(rt) >> (G(rs) & 31))); break;
         case 0x08: took = 1; tgt = G(rs); break;                    /* jr */
-        case 0x09: SETG(rd ? rd : 31, c->npc); took = 1; tgt = G(rs); break; /* jalr */
+        case 0x09: SETG(rd ? rd : 31, c->npc + 4u); took = 1; tgt = G(rs); break; /* jalr */
         case 0x0A: if (G(rt) == 0) SETG(rd, G(rs)); break;          /* movz */
         case 0x0B: if (G(rt) != 0) SETG(rd, G(rs)); break;          /* movn */
         case 0x0C: {                                             /* syscall */
@@ -158,7 +158,7 @@ int psx_cpu_step(psx_cpu_t *c)
                 psx_dev_t *d = (psx_dev_t *)c->core->dev;
                 uint32_t hv = d->sysvec[code - 0x20u];
                 if (hv) { vec_done = 1;
-                          c->gpr[31] = c->npc; c->pc = c->npc - 4u; c->npc = hv;
+                          c->gpr[31] = c->npc + 4u; c->pc = c->npc - 4u; c->npc = hv;
                           c->branch_pending = 0; }
             }
             if (!vec_done && c->on_rootcall && c->on_rootcall(c) == 1) break; /* HLE 已服务=普通指令续跑 */
@@ -174,7 +174,7 @@ int psx_cpu_step(psx_cpu_t *c)
                 psx_dev_t *d = (psx_dev_t *)c->core->dev;
                 uint32_t h = d->sysvec[code - 0x20u];
                 c->cycles++;
-                if (h) { c->gpr[31] = c->npc; c->pc = c->npc - 4u; c->npc = h;
+                if (h) { c->gpr[31] = c->npc + 4u; c->pc = c->npc - 4u; c->npc = h;
                          c->branch_pending = 0; }
                 else { c->pc = c->npc - 4u; c->npc += 4u; }   /* 空向量=nop 等价 */
                 return 0;
@@ -215,10 +215,10 @@ int psx_cpu_step(psx_cpu_t *c)
     case 0x01: /* REGIMM(楔5 修): 操作数=rs, 子操作=rt 字段(MIPS 正字) */
         if (rt == 0 || rt == 16 || rt == 2 || rt == 18) {
             took = (int32_t)G(rs) < 0;
-            if (rt == 16 || rt == 18) SETG(31, c->npc);            /* bltzal */
+            if (rt == 16 || rt == 18) SETG(31, c->npc + 4u);      /* bltzal (ra=延迟槽后, 真机正字) */
         } else if (rt == 1 || rt == 17 || rt == 3 || rt == 19) {
             took = (int32_t)G(rs) >= 0;
-            if (rt == 17 || rt == 19) SETG(31, c->npc);            /* bgezal */
+            if (rt == 17 || rt == 19) SETG(31, c->npc + 4u);      /* bgezal (ra=延迟槽后, 真机正字) */
         } else if (rt == 20 || rt == 21) {                          /* PSX reserved */
             enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
         }
@@ -226,7 +226,7 @@ int psx_cpu_step(psx_cpu_t *c)
         if (took) tgt = c->npc + SIGN16(im) * 4;
         break;
     case 0x02: took = 1; tgt = (c->npc & 0xF0000000u) | ((insn & 0x03FFFFFFu) << 2); break;
-    case 0x03: SETG(31, c->npc); took = 1;
+    case 0x03: SETG(31, c->npc + 4u); took = 1;   /* JAL: ra=延迟槽后一条(MIPS 正字; 旧 ra=槽址=返回重放槽毁调用者) */
         tgt = (c->npc & 0xF0000000u) | ((insn & 0x03FFFFFFu) << 2); break;
     case 0x04: took = G(rs) == G(rt); if (took) tgt = c->npc + SIGN16(im) * 4; break;
     case 0x05: took = G(rs) != G(rt); if (took) tgt = c->npc + SIGN16(im) * 4; break;
@@ -432,7 +432,7 @@ int cmd_cpu_selftest(int argc, char **argv)
     psx_cpu_run(&c, 10);
     CCHK(RDG(20) == 111u && RDG(21) == 222u && RDG(22) == 0u &&
          RDG(23) == 555u && RDG(25) == 777u &&
-         RDG(26) == 444u && RDG(31) == P + 20, "p4_branch_delay_jal");
+         RDG(26) == 444u && RDG(31) == P + 24, "p4_branch_delay_jal");   /* ra=延迟槽后正字 */
     EMIT(P + 0, I_RT(0x06, 3, 0, 2));                  /* blez +2 真跳 1 条 */
     EMIT(P + 4, I_RT(0x0D, 0, 27, 1));                 /* 槽仍执行 */
     EMIT(P + 8, I_RT(0x0D, 0, 28, 0));                 /* 跳过 */

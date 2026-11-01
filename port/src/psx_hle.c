@@ -172,6 +172,16 @@ static uint32_t hb_hook_entry(psx_hle_t *h, uint32_t cmd)
     V0(old);
     return 0;
 }
+/* B(0x4A..0x50) CARD 驱动族 [S](PSn00bSDK stubs.json drivers.s: InitCARD/
+ * StartCARD/StopCARD/_card_write/_card_read/_new_card)。无记忆卡硬件建模:
+ * 驱动生命周期入口 = no-op v0=0(InitCARD 返回 0=成功无卡);
+ * 传输原语 _card_read/_card_write = 公开文档失败面 v0=-1(游戏据此走无卡分支,
+ * 绝不伪造传输成功)。 */
+static uint32_t hb_card_idle(psx_hle_t *h, uint32_t cmd)
+{ (void)cmd; V0(0u); return 0; }
+static uint32_t hb_card_fail(psx_hle_t *h, uint32_t cmd)
+{ (void)cmd; V0((uint32_t)-1); return 0; }
+
 /* B(0x35) 未登记族选择器面: PSn00bSDK 无此号, PSXRecomp 测试名
  * RootCounterClearPolicy(读 BIOS 变量区)——完整语义未定。真盘实证
  * (北斗神拳): 返回值被直接解引用(sw $zero,0($v0)) → 语义=返回一 guest
@@ -375,6 +385,10 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->b[0x5B] = hb_pad_clear;  /* [S] ChangeClearPAD */
     h->b[0x19] = hb_hook_entry;  /* [S] HookEntryInt (北斗神拳首 UNK 实证) */
     h->b[0x35] = hb_b35_policy;  /* 未定名假设面(低锚), 见上注 */
+    h->b[0x4A] = hb_card_idle; h->b[0x4B] = hb_card_idle;  /* [S] InitCARD/StartCARD */
+    h->b[0x4C] = hb_card_idle;                             /* [S] StopCARD */
+    h->b[0x4E] = hb_card_fail; h->b[0x4F] = hb_card_fail;  /* [S] _card_write/read: 无卡=-1 */
+    h->b[0x50] = hb_card_idle;                             /* [S] _new_card */
     /* C [S] */
     h->c[0x02] = hc_enq; h->c[0x03] = hc_deq; h->c[0x07] = hc_install_exc;
     h->c[0x08] = hc_sysinitmem; h->c[0x0A] = ha_nosync_ok;
@@ -412,6 +426,21 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
         cpu->syscall_code >= 0x40u && cpu->syscall_code <= 0x4Cu &&
         ((cpu->syscall_code - 0x40u) % 4u) == 0u)
         vec = 0xA0u + ((cpu->syscall_code - 0x40u) / 4u) * 0x10u;   /* BIOS 族选择器 0x40/44/48/4C */
+    /* 0x80 BIOS 通用 rootcall 入口 [psx-spx/no$psx]: 真机所有 syscall code 落 0x80
+     * 页 handler, $t1=命令号: 0x20-0x3F = InstallHandler 装的服务向量(调 handler,
+     * handler jr $ra 回调用者); 其余号段未登记 → 诚实 UNK。*/
+    if (vec == 0x80u && cmd >= 0x20u && cmd <= 0x3Fu) {
+        psx_dev_t *dv = (psx_dev_t *)h->dev;
+        uint32_t hv = dv ? ((psx_dev_t *)dv)->sysvec[cmd - 0x20u] : 0u;
+        h->last_vec = 0x80u; h->last_cmd = cmd; h->nlog++;
+        if (hv) {
+            cpu->gpr[31] = cpu->npc + 4u;               /* handler jr $ra 回调用者 */
+            cpu->pc = cpu->npc;                          /* 已过延迟槽 */
+            cpu->npc = hv;
+            cpu->branch_pending = 0;
+        } else { V0((uint32_t)-1); h->unk_n++; }
+        g_hle_depth--; return 1;
+    }
     hle_a_fn fn = NULL;
     g_hle_depth++;
     if (vec == 0xA0u && cmd < HLE_A_SLOTS)      { h->last_vec = 0xA0u; fn = h->a[cmd]; }
@@ -469,7 +498,7 @@ int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
         { free(img); return -6; }
     free(img);
     if (d->cnf_stack) sp_base = d->cnf_stack;   /* SYSTEM.CNF STACK= 正字 (真盘变体) */
-    { uint32_t ww2; void *pw = psx_translate(h->core, 0x8007FA90u, &ww2);
+    { uint32_t ww2; void *pw = psx_translate(h->core, 0x8006FA90u, &ww2);
       void *pz = psx_translate(h->core, 0x80010000u, &ww2);
       fprintf(stderr, "COLDPOST [FA90]=%08x [DVA+0]=%08x entry=%08x\n",
               pw ? *(uint32_t*)pw : 0xDEDu, pz ? *(uint32_t*)pz : 0xDEDu, pc); }
@@ -477,6 +506,9 @@ int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
     c->gpr[28] = gp;
     c->gpr[29] = sp_base ? (sp_base - 16u) : 0x801FFFF0u;
     memset(c->gpr, 0, 4 * sizeof(uint32_t));      /* a0..v1 清零(冷启正字) */
+    /* 真机 boot 完成态: BIOS 经 eret 进 EXE 时 status.IE=1 EXL=0(游戏以此为前提
+     * 开 vsync 中断等待; task-144 RETAIL_IRQT 实证 mask=0x000D 但 IE=0 死等) */
+    c->cop0[12] = (c->cop0[12] & ~2u) | 1u;       /* IE=1, EXL=0 */
     c->gpr[31] = HLE_HALT_GPA;                    /* main 返回=halt 环 */
     /* halt 环: j self; nop */
     hle_wr32(h, HLE_HALT_GPA,      (0x02u << 26) | ((HLE_HALT_GPA >> 2) & 0x03FFFFFFu));
@@ -556,7 +588,8 @@ int cmd_boot_selftest(int argc, char **argv)
       p = psx_translate(&core, 0x80123458u, &w); if (p) memcpy(&m2, p, 4); }
     BOOTCHK(h.nlog == n0 + 1u && h.last_vec == 0xA0u && h.last_cmd == 0x3Cu, "b3_putchar_via_kernel");
     BOOTCHK(m1 == 1u && m2 == 0x5Au, "b4_marker_ram");
-    BOOTCHK(c.pc == C + 0x38 || c.npc == C + 0x3C, "b5_pc_in_loop");
+    BOOTCHK(c.pc == C + 0x38 || c.npc == C + 0x3C ||
+         c.pc == C + 0x3C || c.npc == C + 0x38, "b5_pc_in_loop");   /* 环体={J,NOP} 相位无关 */
     BOOTCHK(h.armed == 1 && h.exe_pc == C, "b6_execute_armed");
     /* b7 数据段装载证据: 0x80040000 图案 */
     { uint32_t dv = 0, w; void *p = psx_translate(&core, 0x80040000u, &w); if (p) memcpy(&dv, p, 4);
@@ -807,6 +840,8 @@ int cmd_retail(int argc, char **argv)
     return 0;
 }
 
+static uint32_t d2mask(psx_dev_t *d){ return d->i_mask & 0x3FFFu; }
+static uint32_t d2stat(psx_dev_t *d){ return d->i_stat & 0x3FFFu; }
 int cmd_retail_probe(int argc, char **argv)
 {
     const char *path = NULL; uint32_t cycles = 2000000u;
@@ -827,6 +862,7 @@ int cmd_retail_probe(int argc, char **argv)
            d.files[psx_disc_boot_exe(&d, 0, 0)].name, entry, cpu.gpr[29], cpu.gpr[28]);
     if (getenv("RETAIL_TRACE")) {         /* 首异常单步诊 + 前 16 步回环缓冲 */
         uint32_t budget = getenv("RETAIL_BUDGET") ? (uint32_t)strtoul(getenv("RETAIL_BUDGET"),0,0) : 4000000u;
+        const uint32_t cad = getenv("RETAIL_CAD") ? (uint32_t)strtoul(getenv("RETAIL_CAD"),0,0) : 0u;
         struct { uint32_t pc, ins, t1, t2, v0, a0, ra; } rb[64]; int rn = 0;
         uint32_t wb_pc = 0, wb_val = 0; int wb_n = 0;   /* 0x8007FA90 写者追踪 */
         for (uint32_t i = 0; i < budget; i++) {
@@ -836,15 +872,26 @@ int cmd_retail_probe(int argc, char **argv)
             rb[rn & 63].t2 = cpu.gpr[10]; rb[rn & 63].v0 = cpu.gpr[2]; rb[rn & 63].a0 = cpu.gpr[4];
             rb[rn & 63].ra = cpu.gpr[31];
             rn++;
-            {   /* 监视核心数据槽 0x8007FA90 的写入 (SW/SH/SB 覆盖检测) */
-                uint32_t w2; void *qp = psx_translate(&core, 0x8007FA90u, &w2);
-                uint32_t before = qp ? *(uint32_t*)qp : 0u;
+            {   /* 页级写监视: [63E8]SPU 指针槽 + [6FABC]/[6FA90] 描述符槽 */
+                uint32_t w2;
+                static const uint32_t mslot[3] = { 0x800763E8u, 0x8006FABCu, 0x8006FA90u };
+                static void *mp[3]; static uint32_t mb[3];
+                for (int mi = 0; mi < 3; mi++) {
+                    mp[mi] = psx_translate(&core, mslot[mi], &w2);
+                    mb[mi] = mp[mi] ? *(uint32_t*)mp[mi] : 0u;
+                }
+                uint32_t before = 0u; void *qp = mp[0];
                 psx_cpu_step(&cpu);
+                if (cad && (rn % cad) == 0u) { psx_gpu_tick(&gpu); psx_dev_vframe(&dev); }
                 uint32_t after = qp ? *(uint32_t*)qp : 0u;
-                if (qp && after != before && wb_n < 40) {
-                    fprintf(stderr, "WB%02d @%08x ins=%08x val %08x->%08x\n",
-                            wb_n++, cpu.pc, ins, before, after);
-                    fflush(stderr);
+                for (int mi = 0; mi < 3; mi++) {
+                    uint32_t af = mp[mi] ? *(uint32_t*)mp[mi] : 0u;
+                    if (mp[mi] && af != mb[mi] &&
+                        (wb_n < 12 || af == 0xFFFFFFFFu)) {   /* 饱和后仍记 -1 投毒 */
+                        fprintf(stderr, "WB%02d @%08x ins=%08x val %08x->%08x\n",
+                                wb_n++, mslot[mi], ins, mb[mi], af);
+                        fflush(stderr);
+                    }
                 }
             }
             if (cpu.exc_n) {
@@ -862,6 +909,29 @@ int cmd_retail_probe(int argc, char **argv)
                     for (int wz = 0; wz < 8; wz++) {
                         void *q3 = psx_translate(&core, base + (uint32_t)wz * 4u, &ww);
                         fprintf(stderr, " %08x", q3 ? *(uint32_t*)q3 : 0xDEADBEEFu);
+                    }
+                    fprintf(stderr, "\n");
+                }
+                if (getenv("RETAIL_EXCD")) {   /* epc±4K RAM dump 供 capstone */
+                    FILE *df = fopen("/tmp/hunt_ram.bin", "wb");
+                    if (df) {
+                        uint32_t start = (cpu.cop0[14] & ~0xFFu) - 0x800u;
+                        fprintf(stderr, "EXCDUMP base=%08x\n", start);
+                        for (uint32_t z = 0; z < 0x1000u; z += 4u) {
+                            uint32_t ww9; void *qd = psx_translate(&core, start + z, &ww9);
+                            uint32_t vv = qd ? *(uint32_t*)qd : 0u;
+                            fwrite(&vv, 4, 1, df);
+                        }
+                        fclose(df);
+                    }
+                }
+                {
+                    static const uint32_t sl4[4] = { 0x800763E8u, 0x8006FA90u, 0x8006FABCu, 0x8006FA9Cu };
+                    uint32_t ww8;
+                    fprintf(stderr, "RT SLOTS:");
+                    for (int q8 = 0; q8 < 4; q8++) {
+                        void *q8p = psx_translate(&core, sl4[q8], &ww8);
+                        fprintf(stderr, " [%08x]=%08x", sl4[q8], q8p ? *(uint32_t*)q8p : 0xDEDu);
                     }
                     fprintf(stderr, "\n");
                 }
@@ -891,6 +961,11 @@ int cmd_retail_probe(int argc, char **argv)
         if (hot) for (uint32_t z = 0; z < n; z += 64u) { psx_cpu_step(&cpu); hpc[(cpu.pc >> 4) & 4095u]++; }
         else psx_cpu_run(&cpu, n);
         done += n;
+        if (getenv("RETAIL_IRQT") && (dev.vframes % 200u) == 3u) {   /* 中断三要素 */
+            fprintf(stderr, "IRQT vf=%u st.IE=%x mask=%04x stat=%04x exc=%u\n",
+                    dev.vframes, (cpu.cop0[12] & 1u), d2mask(&dev), d2stat(&dev), cpu.exc_n);
+            fflush(stderr);
+        }
         {   /* 值猎手(task-143 下楔): 首见 0x94639271/9463941B 落 RAM 的帧+现场 */
             static int hunted = 0;
             if (!hunted) {
@@ -921,9 +996,9 @@ int cmd_retail_probe(int argc, char **argv)
            done, h.nlog, h.unk_n, cpu.exc_n, cpu.cop0[13], cpu.cop0[14], cpu.pc, cpu.npc);
     {   /* 首异常现场: badv + epc 指令窗 + 关键寄存器 (task-142 死环钉字) */
         uint32_t wwz;
-        printf("RETAIL_EXC badv=%08x regs v0=%08x v1=%08x a0=%08x a1=%08x t0=%08x t1=%08x sp=%08x\n",
+        printf("RETAIL_EXC badv=%08x regs v0=%08x v1=%08x a0=%08x a1=%08x t0=%08x t1=%08x t2=%08x sc=%x ra=%08x sp=%08x\n",
                cpu.cop0[8], cpu.gpr[2], cpu.gpr[3], cpu.gpr[4], cpu.gpr[5],
-               cpu.gpr[8], cpu.gpr[9], cpu.gpr[29]);
+               cpu.gpr[8], cpu.gpr[9], cpu.gpr[10], cpu.syscall_code, cpu.gpr[31], cpu.gpr[29]);
         printf("RETAIL_EXC epcw:");
         for (int wz = -3; wz <= 2; wz++) {
             void *qz = psx_translate(&core, (cpu.cop0[14] & ~3u) + (uint32_t)wz * 4u, &wwz);
@@ -932,14 +1007,32 @@ int cmd_retail_probe(int argc, char **argv)
         printf("\n");
     }
         {
-            uint32_t slots[3] = { 0x800763E8u, 0x8007FA90u, 0x80010000u };
+            uint32_t slots[4] = { 0x800763E8u, 0x8007FA90u, 0x80010000u, 0x8006FA90u };
             uint32_t wwz2;
             printf("RETAIL_EXC slots:");
-            for (int qs = 0; qs < 3; qs++) {
+            for (int qs = 0; qs < 4; qs++) {
                 void *qp = psx_translate(&core, slots[qs], &wwz2);
                 printf(" [%08x]=%08x", slots[qs], qp ? *(uint32_t*)qp : 0xDEDu);
             }
             printf("\n");
+        }
+        if (getenv("RETAIL_EXCD")) { uint32_t wwz2;   /* epc 上下文 RAM dump 落文件供 capstone 静态反汇编 */
+            FILE *df = fopen("/tmp/hunt_ram.bin", "wb");
+            if (df) {
+                uint32_t start = (cpu.cop0[14] & ~0xFFu) - 0x800u;
+                for (uint32_t z = 0; z < 0x1000u; z += 4u) {
+                    void *qd = psx_translate(&core, start + z, &wwz2);
+                    uint32_t vv = qd ? *(uint32_t*)qd : 0u;
+                    fwrite(&vv, 4, 1, df);
+                }
+                fclose(df);
+                fprintf(stderr, "EXCDUMP base=%08x -> /tmp/hunt_ram.bin\n", start);
+                /* 函数序言追 $v1: 反查 epc 前所有写 $v1 指令码 + 全 RAM 搜立即数对 */
+                FILE *vf = fopen("/tmp/hunt_v1.txt", "w");
+                if (vf) { fprintf(vf, "epc=%08x v1=%08x a0=%08x a1=%08x s0=%08x s2=%08x\n",
+                                 cpu.cop0[14], cpu.gpr[3], cpu.gpr[4], cpu.gpr[5],
+                                 cpu.gpr[16], cpu.gpr[18]); fclose(vf); }
+            }
         }
     psx_dev_trace_dump(14);
     if (hot) {
