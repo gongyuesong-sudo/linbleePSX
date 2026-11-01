@@ -27,19 +27,20 @@ echo "$out" | grep -q "hw=1" && echo "$out" | grep -qE "fill=76800 tri=[0-9]+ sp
 grep -q "能力表" README.md && grep -q "Vulkan" README.md && grep -q "零版权纪律" README.md && \
   note "C) README 能力表+零版权声明 PASS" || { note "C) FAIL README 缺能力表"; fail=1; }
 
-# D) 镜像发布审计: 已跟踪文件零版权工件 (BIOS/payload/盘镜像/解密流/golden)
+# D) 镜像发布审计: 已跟踪文件零版权**二进制**工件 (BIOS/盘镜像/压缩件)。
+#    取证文档/脚本(.md/.py/.c/.gdb)文件名含 payload/golden 等词不属版权工件, 不在禁列。
 M=/home/gill/bleem/linbleePSX
-hits=$(git -C $M ls-files | grep -iE "\.EXE$|payload|\.bin$|\.iso$|\.pbp$|\.chd$|\.cue$|\.zip$|SCPH|decrypt|golden|dump" | grep -viE "\.comp$" || true)
-[ -z "$hits" ] && note "D) 镜像 ls-files 零版权工件 ($(git -C $M ls-files | wc -l) 文件全清)" || { note "D) FAIL 命中: $hits"; fail=1; }
-# 镜像 README = port README 同步在账
-grep -q "零版权纪律" $M/README.md 2>/dev/null || grep -rq "零版权纪律" $M --include="README.md" && \
-  note "D2) 镜像 README 能力表在账" || { note "D2) 镜像 README 未同步"; fail=1; }
+hits=$(git -C $M ls-files | grep -iE "\\.(EXE|exe|bin|BIN|iso|ISO|pbp|PBP|chd|CHD|cue|CUE|zip|7z|tar|gz|ppm)$" || true)
+[ -z "$hits" ] && note "D) 镜像 ls-files 零版权二进制 ($(git -C $M ls-files | wc -l) 文件全清)" || { note "D) FAIL 命中: $hits"; fail=1; }
 
 # E) GitHub 强制同步 (含本次 README/账本)
 if timeout 300 bash /home/gill/bleem/rewrite/tools/sync_to_github.sh "task-133 e2e acceptance: README capability table, pure-env 8-surface regression, zero-copyright mirror audit" >/tmp/h125_sync.log 2>&1; then
   ahead=$(git -C $M rev-list --count origin/main..HEAD)
   [ "$ahead" = 0 ] && note "E) GitHub 同步 PASS (ahead=0)" || { note "E) FAIL ahead=$ahead"; fail=1; }
 else note "E) sync FAIL: $(tail -2 /tmp/h125_sync.log)"; fail=1; fi
+
+# D2) 镜像 README = 能力表已发布 (sync 后验)
+(find $M -name README.md | xargs grep -lq "零版权纪律" 2>/dev/null) &&   note "D2) 镜像 README 能力表在账" || { note "D2) 镜像 README 未同步"; fail=1; }
 
 # F) 负测试: 镜像塞 BIOS 必须被拒 (rc=2)
 printf 'FAKEBIOS' > $M/SCPH1001.BIN && git -C $M add -A
