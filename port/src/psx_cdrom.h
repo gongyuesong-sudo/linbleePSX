@@ -28,15 +28,17 @@ typedef struct {
 typedef struct {
     FILE    *f;
     int     sector_size;          /* 2048 | 2352 */
-    int     mode2;                /* 2352 帧是 MODE2(XA) */
+    int     mode2;                /* (兼容位) 2352 帧是 MODE2(XA) */
+    int     data_off;             /* 2352 帧 user data 偏移: 16=真MODE1 / 24=零售&自造 / 32=XA-FORM 探测定案 */
     uint32_t data_frame0;         /* 数据区 LBA0 的帧号 */
     uint8_t  buf[2448];           /* 帧暂存 */
     /* ISO9660 */
     int     have_iso;
     uint32_t root_lba, root_size;
     char     volume_id[33];
-    cd_file_t files[64];
+    cd_file_t files[1024];
     int     nfiles;
+    uint32_t cnf_stack;           /* SYSTEM.CNF STACK=(十六进制) 冷启 sp 基址, 0=无 */
     /* 简易 fd 面 (A 族文件 API 消费) */
     struct { int used; int fidx; uint32_t pos; } fd[8];
 } psx_disc_t;
@@ -49,11 +51,19 @@ int  psx_disc_read(psx_disc_t *d, uint32_t lba, uint32_t nsec, uint8_t *dst);
 int  psx_disc_scan_root(psx_disc_t *d);
 /* 找文件(大小写折叠, 剥 ";N"); 命中返回下标, 否则 -1 */
 int  psx_disc_find(psx_disc_t *d, const char *name);
+/* 零售启动态解析 (公开 PSX 盘约定): 根目录 SYSTEM.CNF 的 BOOT=cdrom:\XXX;1 →
+ * 剥前缀大写名; 无 CNF 回落 PSX.EXE。命中返回 files[] 下标, name_out 可 NULL。 */
+int  psx_disc_boot_exe(psx_disc_t *d, char *name_out, unsigned cap);
 
 /* ---- 自造 ISO 构建器 (HBEXE 测试盘, 亦 task-133 发布链输入; 零版权) ---- */
 /* exe_data = PSX-EXE 镜像(含 2KB 头), n = 字节; cue_mode: 0=裸2048 .iso, 1=MODE1/2352, 2=MODE2/2352 */
 int  psx_iso_build(const char *out_path, const uint8_t *exe_data, uint32_t n,
                    const char *exe_name, int cue_mode);
+/* 参数化构建器: stride=2048|2352, data_off=16|24|32(2352 时), pregap150, cnf_text 非空
+ * 则根目录加 SYSTEM.CNF(LBA20, exe 顺移 LBA21)。全部自造字节, 零版权。 */
+int  psx_iso_build2(const char *out_path, const uint8_t *exe_data, uint32_t n,
+                    const char *exe_name, int stride, int data_off,
+                    int pregap150, const char *cnf_text);
 
 /* main.c 子命令入口 (--cd-selftest): 0=PASS */
 int  cmd_cd_selftest(int argc, char **argv);

@@ -355,7 +355,7 @@ static int hw_shim_present(void *ctx, psx_gpu_t *g)
 /* HBEXE 图形程序: 蓝填充 + 红传输块(0xA0) + 绿原始精灵(0x7C, E1 位25) + 环 */
 static void gb_build_exe(uint8_t *img, uint32_t n)
 {
-    const uint32_t C = 0x80041000u;
+    const uint32_t C = 0x80040100u;
     #define ADDIU(rt,im) ((0x09u << 26) | (0u << 21) | ((rt) << 16) | ((im) & 0xFFFFu))
     #define ADDIUR(rs,rt,im) ((0x09u << 26) | ((rs) << 21) | ((rt) << 16) | ((im) & 0xFFFFu))
     #define ORI(rt,im) ((0x0Du << 26) | ((rt) << 21) | ((rt) << 16) | ((im) & 0xFFFFu))  /* rs=rt (LUI+ORI 惯用) */

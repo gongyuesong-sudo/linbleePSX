@@ -18,6 +18,8 @@ int cmd_cd_selftest(int argc, char **argv);
 int cmd_boot_selftest(int argc, char **argv);
 int cmd_gpu_selftest(int argc, char **argv);
 int cmd_psx_window(int argc, char **argv);
+int cmd_retail(int argc, char **argv);
+int cmd_retail_probe(int argc, char **argv);
 int cmd_bios_run(int argc, char **argv);
 #include <stdio.h>
 #include <string.h>
@@ -52,6 +54,8 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--boot-selftest") == 0)           return cmd_boot_selftest(argc, argv);
         else if (strcmp(argv[i], "--gpu-selftest") == 0)            return cmd_gpu_selftest(argc, argv);
         else if (strcmp(argv[i], "--psx-window") == 0)              return cmd_psx_window(argc, argv);
+        else if (strcmp(argv[i], "--retail") == 0)                   return cmd_retail(argc, argv);
+        else if (strcmp(argv[i], "--retail-probe") == 0)            return cmd_retail_probe(argc, argv);
         else if (strncmp(argv[i], "--bios-run", 10) == 0)            return cmd_bios_run(argc, argv);
     }
 

@@ -10,7 +10,7 @@
  * 未登记槽 = 未实现 (v0=-1 + last_unknown 记账), 绝不臆造号。
  *
  * 派发协议 = 真机 LIBSN 序列 (原样兼容, 因游戏侧代码烧在自己的 EXE 里):
- *   li $t1,cmd ; li $t2,0xA0|0xB0|0xC0 ; jr $t2 ; (延迟槽) ; 该地址处 syscall
+ *   li $t1(gpr9),cmd ; li $t2(gpr10),0xA0|0xB0|0xC0 ; jr $t2 ; (延迟槽) ; 该地址处 syscall
  *   裸 syscall a0=1/2 = Enter/ExitCriticalSection [S _syscalls.s]
  * 参数移位 ABI: 内核 handler 视 a0..a2=实参0..2, 更多自栈 sp+0x10。
  * 返回: v0 = 结果, pc = 返回到 syscall 后一条 (HLE 无 eret)。
@@ -35,6 +35,10 @@ typedef struct psx_hle {
     uint32_t nlog;         /* 已服务 rootcall 总数 */
     uint32_t last_vec, last_cmd;
     int      last_unknown; /* 最近未实现号 (vec<<8|cmd), 无=-1 */
+    void      *dev;               /* psx_dev_t* (GPU_cw A(0x49) GP0 转发; 可 NULL) */
+    /* retail probe 观测面: 未登记号直方图 (key = vec<<8|cmd) */
+    uint32_t unk_n;
+    struct { uint32_t key; uint32_t cnt; } unk[48];
     /* 堆 (b_InitHeap 域) */
     uint32_t heap_base, heap_size, heap_brk;
     int      heap_ready;

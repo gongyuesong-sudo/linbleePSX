@@ -224,7 +224,7 @@ int psx_cd_dev_integration_probe(void)
         psx_dev_write(&dev, 0x1820, 0x06u | (1u << 8), 2);      /* cmd + param0=1 */
         if (psx_dev_read(&dev, 0x1820, 1) != 0x11) bad++;       /* 消 ACK */
         uint32_t pc = 0xDEAD; memcpy(&pc, dev.cd_sect + 0x10, 4);
-        if (!dev.cd_sect_valid || pc != 0x80041000u) bad += 10;
+        if (!dev.cd_sect_valid || pc != 0x80040100u) bad += 10;
         /* GetStat 有盘形态 = [0x11,0x14,0x00,...] 且 STAT bit7 弹前=1 */
         psx_dev_write(&dev, 0x1820, 0x01, 1);
         if ((psx_dev_read(&dev, 0x1824, 1) & 0x80u) == 0) bad++;
