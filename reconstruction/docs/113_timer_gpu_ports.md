@@ -305,3 +305,9 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 诊断面新增(全部门控零开销): RETAIL_TRAP=<excode hex/1=任意> 首目标异常即停; RETAIL_PCRING=1 64 深 pc 环;
   TRAP 现场含 vec 页活体 + ringwin RAM 反汇编窗 + 栈窗。
 - 诊断坑(本楔踩): RETAIL_HOT 采样 z+=64 实为 1/64 步进(时间轴缩水 64x), HOT 结果不可与 cpu_run 面直比。
+- 终版复验(全部改动后): 八面 118P/0F; 北斗神拳 200M served=172 UNK=0 exc=1(良性同基线);
+  三国志2 200M served=11 exc=0; NBA 200M served=27 UNK=3 exc=0; 窗口 PSXWIN frames=66 hw=1。
+- 遗留(下楔): 打击者1945 单发 cause=0/jump-to-0 残例(80169820 lbu 循环取 NULL 服务, 疑某
+  getter rootcall 该返 RAM 指针槽); NBA UNK a0:19/1b; 北斗神拳 disp=0 渲染路径未建帧。
+- 本楔宿主崩溃教训: EXC1ST dump `epc-0x80` 无门 → epc=0 时地址回绕; 任何以 guest 地址算窗口
+  的诊断面必须 [0x80000000,0x88000000)+win==RAM 双门(与楔18 epcw 同规)。
