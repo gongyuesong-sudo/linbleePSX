@@ -290,6 +290,25 @@ int psx_cpu_step(psx_cpu_t *c)
     case 0x20: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 1, &v)) SETG(rt, (uint32_t)(int32_t)(int8_t)v); break; } /* lb */
     case 0x21: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 2, &v)) SETG(rt, SIGN16(v)); break; }              /* lh */
     case 0x23: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 4, &v)) SETG(rt, v); break; }                       /* lw */
+    case 0x22: case 0x26: case 0x2A: case 0x2E: {   /* lwl/lwr/swl/swr (MIPS 未对齐,
+                * task-146 真盘钉: 北斗神拳 8a630003 lwl 未实现 = 保留指令风暴 4300 次) */
+        uint32_t a32 = G(rs) + SIGN16(im), al = a32 & ~3u, sh = (a32 & 3u) * 8u;
+        uint32_t w = 0;
+        if (ld_val(c, al, 4, &w) != 0) break;                    /* 已含地址错异常 */
+        if (insn >> 26 == 0x22u) { uint32_t m = sh ? ((1u << sh) - 1u) : 0u;   /* lwl */
+            SETG(rt, (G(rt) & m) | (w & ~m)); }
+        else if (insn >> 26 == 0x26u) { uint32_t m = (sh == 24u) ? 0xFFFFFFFFu : ((1u << (sh + 8u)) - 1u); /* lwr */
+            SETG(rt, (G(rt) & ~m) | (w & m)); }
+        else {   /* swl/swr: 读改写对齐字 */
+            uint32_t nw = w;
+            if (insn >> 26 == 0x2Au) { uint32_t m = sh ? ((1u << sh) - 1u) : 0u;
+                nw = (w & m) | (G(rt) & ~m); }
+            else { uint32_t m = (sh == 24u) ? 0xFFFFFFFFu : ((1u << (sh + 8u)) - 1u);
+                nw = (w & ~m) | (G(rt) & m); }
+            st_val(c, al, 4, nw);
+        }
+        break;
+    }
     case 0x24: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 1, &v)) SETG(rt, v & 0xFFu); break; }               /* lbu */
     case 0x25: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 2, &v)) SETG(rt, v & 0xFFFFu); break; }             /* lhu */
     case 0x27: { uint32_t v; if (!ld_val(c, G(rs) + SIGN16(im), 4, &v)) SETG(rt, v); break; }                       /* lwu */

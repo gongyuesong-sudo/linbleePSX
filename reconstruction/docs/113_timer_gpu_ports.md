@@ -94,3 +94,16 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   真机同型, 非 bug。北斗神拳 9463 帧 gp0 5→14 缓增 = 长启动解包, 非死锁。
 - **下楔**: ①加速/对齐启动路径(Timer 分频与 SPU 传输语义对 vsync 内循环的节流影响);
   ②一次性 cause=20 store 现场(北斗神拳); ③第三枚盘(NBA Live 2003 USA)交叉验证。
+
+## SESSION-146 追加 (楔 8 — 双 CPU 级正字)
+- **LWL/LWR/SWL/SWR 实现**(楔4 遗留注释债): 真盘 `8a630003 lwl` 落 default=
+  保留指令风暴 4300 次; 旧死环 `ac400000 swl`(非 sw!)未实现一并破。MIPS 小端掩码合并:
+  lwl rt=(rt&((1<<8a)-1))|(w&~m); lwr 反向; swl/swr=对齐字读改写。
+- **帧节拍量级正字**: 56445 → **564456 周期/帧** (33.8688MHz/60)。旧值少一"0" =
+  vsync handler 每帧只有 1/10 预算, 一切"每帧一步慢推进"皆此假象。
+- **0x80 入口 12 位全命令** [no$psx]: bits8-11 模块(0=System 1/3=GPU 4=SPU 5=CDROM 6=SIO)
+  bit7 表 bits0-6 ID; System 模块转 A/B 表服务。**"真盘零文件 API"结论作废** —
+  北斗神拳 t1=0x00 = System-A-ID0 open 走全命令面。非 System 模块 UNK 直方图(下楔)。
+- **战果**: 北斗神拳 1.1G 周期(1949 帧) exc=4300→2、UNK=0、pc 破 0x8006xxxx(解包过?);
+  三国志2 200M 周期 UNK=0; 窗口 hw=1 无回归; 八面 0F。**GPU 仍空闲(gp0=14)** —
+  下楔=钉 vsync handler 主状态机到 OTAG 提交之间缺的服务面(EXC1ST 面已备好)。

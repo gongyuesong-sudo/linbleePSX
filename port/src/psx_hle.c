@@ -488,6 +488,34 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
     /* 0x80 BIOS 通用 rootcall 入口 [psx-spx/no$psx]: 真机所有 syscall code 落 0x80
      * 页 handler, $t1=命令号: 0x20-0x3F = InstallHandler 装的服务向量(调 handler,
      * handler jr $ra 回调用者); 其余号段未登记 → 诚实 UNK。*/
+    /* 0x80 入口 12 位全命令格式 [no$psx root call]: bits8-11=模块(0=System,
+     * 1/3=GPU, 4=SPU, 5=CDROM, 6=SIO), bit7=表(0=A 1=B), bits0-6=ID。
+     * (task-146 实证: 北斗神拳 syscall code=0 t1=0x35/0x00 = System A 表
+     * ID0=open —— "零文件 API" 旧结论作废, 文件走全命令面) */
+    if (vec == 0x80u && cmd >= 0x100u) {
+        uint32_t mod = cmd >> 8, tab = (cmd >> 7) & 1u, id = cmd & 0x7Fu;
+        hle_a_fn sub = NULL;
+        if (mod == 0u) { h->last_vec = tab ? 0xB0u : 0xA0u; h->last_cmd = id;
+            if (tab == 0u && id < HLE_A_SLOTS) sub = h->a[id];
+            else if (tab == 1u && id < HLE_B_SLOTS) sub = h->b[id];
+            h->nlog++;
+            g_hle_depth++;
+            if (sub) sub(h, id);
+            else { V0((uint32_t)-1); h->unk_n++;
+                   for (int z = 0; z < 48; z++) {
+                       if (h->unk[z].key == (h->last_vec << 8 | id)) { h->unk[z].cnt++; break; }
+                       if (h->unk[z].cnt == 0) { h->unk[z].key = h->last_vec << 8 | id; h->unk[z].cnt = 1; break; } } }
+            g_hle_depth--; return 1;
+        }
+        /* GPU/SPU/CDROM/SIO 模块全命令: 未登记 → UNK v0=-1 直答(下楔逐个钉) */
+        h->last_vec = 0x80u; h->last_cmd = cmd; h->nlog++;
+        V0((uint32_t)-1); h->unk_n++;
+        { uint32_t k = (mod << 16) | cmd;
+          for (int z = 0; z < 48; z++) {
+              if (h->unk[z].key == k) { h->unk[z].cnt++; break; }
+              if (h->unk[z].cnt == 0) { h->unk[z].key = k; h->unk[z].cnt = 1; break; } } }
+        g_hle_depth--; return 1;
+    }
     if (vec == 0x80u && cmd >= 0x20u && cmd <= 0x3Fu) {
         psx_dev_t *dv = (psx_dev_t *)h->dev;
         uint32_t hv = dv ? ((psx_dev_t *)dv)->sysvec[cmd - 0x20u] : 0u;
@@ -1011,8 +1039,9 @@ int cmd_retail_probe(int argc, char **argv)
             }
         }
     }
-    /* task-135 帧节拍: 56445 周期/帧 ≈ 33.87MHz/60 → 每帧 VBlank IRQ + gpu tick */
-    const uint32_t frame_cycles = 56445u;
+    /* 帧节拍正字 (task-146): PSX CPU 33.8688MHz / NTSC 60 = 564456 周期/帧 —
+     * 旧 56445 少一量级(10x 欠喂), 真盘 vsync 内主循环全部显"慢一格"假象 */
+    const uint32_t frame_cycles = 564456u;
     uint32_t done = 0;
     static uint32_t hpc[4096];                    /* pc 热点采样 (page 桶, 诊断 RETAIL_HOT) */
     const int hot = getenv("RETAIL_HOT") != NULL;
@@ -1021,6 +1050,35 @@ int cmd_retail_probe(int argc, char **argv)
         if (hot) for (uint32_t z = 0; z < n; z += 64u) { psx_cpu_step(&cpu); hpc[(cpu.pc >> 4) & 4095u]++; }
         else psx_cpu_run(&cpu, n);
         done += n;
+        {   /* 每 cause 首现场 (task-146): 新 excode 出现即 dump epc±128B RAM + 指令 */
+            static uint32_t prev_exc = 0; static unsigned seen_causes;
+            if (cpu.exc_n > prev_exc) {
+                uint32_t ex = (cpu.cop0[13] >> 2) & 0x1Fu;
+                if (!(seen_causes & (1u << ex))) {
+                    seen_causes |= (1u << ex);
+                    uint32_t ww6;
+                    void *qi = psx_translate(&core, cpu.cop0[14] & ~3u, &ww6);
+                    fprintf(stderr, "EXC1ST cause=%x(%u次) epc=%08x ins=%08x badv=%08x ra=%08x\n",
+                            cpu.cop0[13], cpu.exc_n, cpu.cop0[14],
+                            qi ? *(uint32_t*)qi : 0xDEADBEEFu, cpu.cop0[8], cpu.gpr[31]);
+                    char fname[64];
+                    snprintf(fname, sizeof fname, "/tmp/exc1st_%02lx.bin", (unsigned long)ex);
+                    FILE *df = fopen(fname, "wb");
+                    if (df) {
+                        uint32_t start = (cpu.cop0[14] & ~0x7Fu) - 0x80u;
+                        for (uint32_t z = 0; z < 0x100u; z += 4u) {
+                            void *qd = psx_translate(&core, start + z, &ww6);
+                            uint32_t vv = qd ? *(uint32_t*)qd : 0u;
+                            fwrite(&vv, 4, 1, df);
+                        }
+                        fprintf(stderr, "EXC1ST dump %s base=%08x\n", fname, start);
+                        fclose(df);
+                    }
+                    fflush(stderr);
+                }
+                prev_exc = cpu.exc_n;
+            }
+        }
         if (getenv("RETAIL_IRQT") && (dev.vframes % 200u) == 3u) {   /* 中断三要素 */
             fprintf(stderr, "IRQT vf=%u st.IE=%x mask=%04x stat=%04x exc=%u\n",
                     dev.vframes, (cpu.cop0[12] & 1u), d2mask(&dev), d2stat(&dev), cpu.exc_n);
