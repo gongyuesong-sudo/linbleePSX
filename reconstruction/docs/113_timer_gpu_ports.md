@@ -622,3 +622,17 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   从 t1 或 caller 语义取号交表派发; 或建 4×256 向量页 stub 面(jr $ra+nop 族)。
   异常面本身良性(excite=1 后水位派发恢复, 泵照跑)。
 - 回归: 本楔无转正改动, port 树=楔36 态(4eeafc6), 八面 8/8 基线不变。
+
+## 楔38 (SESSION-177): **SWI0 老式内核面转正** — 北斗首入零异常稳态
+- 活体钉 `8004F454/4F464` wrapper 族 = PSYQ 老式内核调用: `addiu a0,N; syscall`
+  (code=0), **号在 a0, t1/t2 不参与**(本盘 t2=8005BEFC 为陈旧 jr-table 指针)。
+  4F454 a0=1 / 4F464 a0=2 = Enter/ExitCriticalSection [S]; 旧 vec==0&&a0 面因
+  陈旧 t2≥KSEG0 未命中 → 落异常。
+- 转正: code==0 且 vec/cmd 均为 KSEG0 垃圾 → vec 折 0 交 SWI0 面。SYSTR 零输出。
+- 默认门北斗: served 172→**173, exc 1→0, unknown=0** (50M+200M 双验); 泵稳态
+  355 vframes, gp0=4/gp1=2 持平(渲染提交仍待 InitGeom 后置段)。
+- 楔37 修正记录: 8005BEFC **不是 GetVideoMode 路**(阶段二 `t1=0x56;t2=0xB0;
+  jalr` 走预放页 syscall→本核派发正常); SYSTR 陈旧值假象已闭环, 双阶段假说作废。
+- 回归: 八面 8/8; 三国志2/NBA/Striker 30M exc=0 全持平。
+- 楔39 单点: 泵稳定但 gp0 不涨 = 渲染提交段未达; 候选 WPC 钉 50AF8/51244 与
+  Exec(A43)/FlushCache(A44) 后二段自解压完成度。

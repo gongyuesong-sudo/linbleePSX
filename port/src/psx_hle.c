@@ -644,6 +644,14 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
         cpu->syscall_code >= 0x40u && cpu->syscall_code <= 0x4Cu &&
         ((cpu->syscall_code - 0x40u) % 4u) == 0u)
         vec = 0xA0u + ((cpu->syscall_code - 0x40u) / 4u) * 0x10u;   /* BIOS 族选择器 0x40/44/48/4C */
+    /* 楔38 正字 [活体钉 8004F454/4F464 wrapper 族]: PSYQ 老式 **SWI0 内核面** =
+     * `addiu a0,N; syscall`(code=0), 号在 a0, **t1/t2 不参与**(本盘活体 t2=
+     * 8005BEFC 陈旧 jr-table 指针; 真机 code 0 通用 handler 按 a0 族分派)。
+     * 实证 wrapper 对: 4F454 a0=1 / 4F464 a0=2 = Enter/ExitCriticalSection
+     * [S sys.s 同族], 既有 vec==0&&a0 号处理直接复用; 陈旧码位 t2≥KSEG0 折 0。 */
+    if (cpu->syscall_code == 0u && vec != 0x80u && vec != 0xA0u &&
+        vec != 0xB0u && vec != 0xC0u && vec >= 0x80000000u && cmd >= 0x80000000u)
+        vec = 0u;
     /* 0x80 BIOS 通用 rootcall 入口 [psx-spx/no$psx]: 真机所有 syscall code 落 0x80
      * 页 handler, $t1=命令号: 0x20-0x3F = InstallHandler 装的服务向量(调 handler,
      * handler jr $ra 回调用者); 其余号段未登记 → 诚实 UNK。*/
