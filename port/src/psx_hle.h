@@ -68,6 +68,7 @@ int  psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core);
 void psx_hle_uninstall(psx_hle_t *h);
 /* CPU on_rootcall 钩实现: 1=已服务 0=走原异常路径 */
 void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick);
+void psx_hle_waterline_pump(psx_hle_t *h);   /* 楔49: 水位派发表驱动 */
 void psx_hle_sysrp_fire(psx_hle_t *h);   /* VBlank 触发 SysEnqIntRP 编号链 #2 (楔20) */  /* 60Hz 设备回调派发 (task-149) */
 int  psx_hle_rootcall(psx_cpu_t *cpu);
 /* 内部堆 API (LoadImage 等复用; EvHeader=公开 PSX 堆头 5 word 布局) */

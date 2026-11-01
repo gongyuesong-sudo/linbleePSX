@@ -797,3 +797,17 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   段的 `I_STAT&I_MASK&[50F0]` 三条件与是否因某 mask 位不再置而短路);
   或主泵路径是否应独立触发一次 8 槽扫。用 WPC 0523f 随步数增长曲线 vs vframes。
 - 纯取证, port 树=楔47 态(净)。回归基线不动。
+
+## 楔49 (SESSION-187): **水位泵解绑 rootcall 时刻** — 主线程推进进 CD 引擎体
+- 根因: 原水位派发只在 rootcall 尾部有机会执行, 而本体热环零 rootcall →
+  帧 tick 从不派发 (分发器仅 init 期 6 次, 全为初始化)。
+- 转正: `psx_hle_waterline_pump()` 抽函数(rootcall 尾同函数) + 探针帧循环尾
+  vframe 边界外驱。实测: served 173→**247**, gp0 10→**13**, pc 进 CD 引擎体
+  `800602F8`(wedge47 族区), exc=0; 八面 8/8。
+- 新单点(楔50): VBlankIntCB 主门 `51F04 (I_MASK&I_STAT&[50F0])` 在**每次进入时
+  I_STAT=0**(WPCHIT v0/v1/a0 全 0; [50F0]=0xD, I_MASK=0xD, 探针末 I_STAT=1 平素
+  被 51F40 nor 清光)——per-frame ISR 15 hits 全来自 init 路(ra=51E20), 帧中
+  VBlankIntCB 根本不被调(注册方=51E18 条件跳)。分发器 523FC 由 523DC
+  `jal 51C44(a1=523FC)` 经 callback 注册面挂表; 楔50=钉"谁在帧中应调
+  VBlankIntCB/或直接把泵接成每 vframe 调 523FC 等价体面"(高锚=523DC 注册语义)。
+- 教训: 水位派发绑"陷入时刻"在纯轮询热环下=永不触发; vframe 边界外驱才是正面。

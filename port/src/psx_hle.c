@@ -622,6 +622,33 @@ static void hle_rchist(uint32_t vec, uint32_t cmd)
     }
 }
 
+/* 楔49: 水位泵 = entry_hook 派发从 rootcall 时刻解绑, 亦可由 vframe 边界
+ * 外驱 (rootcall 尾块同一函数, 语义单点)。 */
+void psx_hle_waterline_pump(psx_hle_t *h)
+{
+    psx_cpu_t *cc = h->cpu;
+    extern unsigned g_irqdbg;
+    if (!h->dev || !cc || cc->ctx_saved || !cc->entry_hook) return;
+    uint32_t vf = psx_dev_vframes_get((psx_dev_t *)h->dev);
+    if (vf == h->last_pump_vf) return;
+    h->last_pump_vf = vf;
+    uint32_t hw; void *ph = psx_translate(h->core, cc->entry_hook & ~3u, &hw);
+    uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
+    uint32_t target = raw & ~1u;
+    if (raw && target >= 0x80000000u && target < 0x88000000u) {
+        cc->ctx_saved = 1;
+        cc->saved_pc = cc->pc; cc->saved_npc = cc->npc;
+        cc->saved_status = cc->cop0[12]; cc->saved_epc = cc->cop0[14]; cc->saved_cause = cc->cop0[13];
+        for (int r = 0; r < 32; r++) cc->saved_gpr[r] = cc->gpr[r];
+        cc->cop0[12] = (cc->cop0[12] & ~3u) | 2u;
+        cc->branch_pending = 0;
+        cc->gpr[2] = 1u;
+        cc->gpr[31] = 0x800001A8u;
+        cc->pc = target - 4u; cc->npc = target;
+        if (g_irqdbg > 1u) printf("RCDBG->RFE@vf vf=%u target=%08x\n", vf, target);
+    }
+}
+
 int psx_hle_rootcall(psx_cpu_t *cpu)
 {
     psx_hle_t *h = (psx_hle_t *)cpu->hle;
@@ -745,29 +772,7 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
      * BIOS 在每次 rootcall 陷入时机服务设备链(3-19 内核), 不靠硬件中断到达。
      * 派发 = rootcall 处理完后, 若 vframe 有未服务 tick → 存帧(此刻正处主线程
      * 上下文!) → 跳派发器(v0=1) → 泵内 B0:17 从影子帧恢复回 rootcall 续途。 */
-    { psx_cpu_t *cc = h->cpu;
-      extern unsigned g_irqdbg;
-      if (h->dev && cc && !cc->ctx_saved && cc->entry_hook) {
-          uint32_t vf = psx_dev_vframes_get((psx_dev_t *)h->dev);
-          if (vf != h->last_pump_vf) {
-              h->last_pump_vf = vf;
-              uint32_t hw; void *ph = psx_translate(h->core, cc->entry_hook & ~3u, &hw);
-              uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
-              uint32_t target = raw & ~1u;
-              if (raw && target >= 0x80000000u && target < 0x88000000u) {
-                  cc->ctx_saved = 1;
-                  cc->saved_pc = cc->pc; cc->saved_npc = cc->npc;
-                  cc->saved_status = cc->cop0[12]; cc->saved_epc = cc->cop0[14]; cc->saved_cause = cc->cop0[13];
-                  for (int r = 0; r < 32; r++) cc->saved_gpr[r] = cc->gpr[r];
-                  cc->cop0[12] = (cc->cop0[12] & ~3u) | 2u;
-                  cc->branch_pending = 0;
-                  cc->gpr[2] = 1u;
-                  cc->gpr[31] = 0x800001A8u;
-                  cc->pc = target - 4u; cc->npc = target;
-                  if (g_irqdbg > 1u) printf("RCDBG->RFE@rc vf=%u target=%08x\n", vf, target);
-              }
-          }
-      } }
+    psx_hle_waterline_pump(h);
     g_hle_depth--;
     return 1;
 }
@@ -1309,7 +1314,11 @@ int cmd_retail_probe(int argc, char **argv)
                 }
             }
         }
-        else psx_cpu_run(&cpu, n);
+        else {
+            psx_cpu_run(&cpu, n);
+            /* 楔49: vframe 边界水位泵(rootcall 时刻绑定解耦, 修分发器饿死) */
+            psx_hle_waterline_pump(&h);
+        }
         done += n;
         {   /* 每 cause 首现场 (task-146): 新 excode 出现即 dump epc±128B RAM + 指令 */
             static uint32_t prev_exc = 0; static unsigned seen_causes;
