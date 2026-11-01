@@ -396,3 +396,21 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   该计数器递增者=真机 DMA/中断收尾(0x807FFE98 高栈帧), 环闭合需 CDINT/SIO INT 到 I_STAT 面。
 - 楔23 新增实验面(默认关): VBlank 票注入 [80075040]=1(fire 内, RP 门控)——60M 无消费方,
   泵不读该槽(假说降级); [6AF4] 面为真候选。
+
+## 楔24 (SESSION-163): SIO 语义全面翻案 + TX 完成同步清零模型
+- **翻案(800666F4 活体全解)**: 该函数不是超时检查器。正字=游戏**软件 BUSY 标志**
+  `[800D6AF4]` 等待: a0=port&0xFFFF, `v0=(a0-[6AF4]) >= [6AF8]阈值`。TX 发送原语
+  (80065824 全解): flush 读 1040(期望 idle 残留 0xFF) → 等 1044 bit0 → sb ~s3 写 1040
+  → jal 800666f4 循环等 BUSY 清零 → 二次写 → 出。清 [6AF4]=0 的函数=800666f0(sw zero)。
+- 楔23 的 5A5D 预投**反而卡死** flush 阈值判定(5A<0x91=0x800D6AF8 活体钉字);
+  0xFF idle 残留才 >=0x91。→ **FIFO 模型 v5**: 1040 无数据恒读 0xFF; TX 字节写=
+  同步完成传输(排 RX 应答 5A5D + **直接写 RAM 清 [800D6AF4] bit0**, psx_translate
+  双门 win==RAM)。握手 SIOTR 全过。
+- 默认门(SIO FIFO 常开)北斗 200M: served 180→172, pc 推进进 GetTickWait(800519E4)
+  函数体=主线程活; 三国志2 exc=0 基线保。八面 118P/0F。
+- 链火 RPFIRE done=0 复勘: pc=807FFE98 = **自家 fire trampoline(jr $ra)** 上=handler
+  已返回一轮(楔21 线程体不返回正字的一部分); [800D43A8] vsync 计数器 30M/100M 均=0
+  无递增者 → 递增方=派发器 vsync 分支, 其在 fire 4000 步预算内未到达。
+- 楔25 候选: (a) fire 预算 4000→加大/分段, 追踪 vsync 分支到 43A8 递增;
+  (b) 8005F318 设备表初始化 8×0x18 结构(800D42E0)语义; (c) 主线程 GetTickWait mode3
+  与 [80076188] 指针调用环。

@@ -129,11 +129,17 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
         /* 楔23: 真机 pad 应答序列 0x5A 0x5D(digital 在位)。游戏引擎以非 5A 头判超时
          * (0xFFFF 无垫面被 800666f4 等待环拒 → 走 80052024 失败清理 sh zero [50C2])。 */
-        if (d->sio_rxf) {
+        if (d->sio_rxf > 1u) {            /* 楔24: RX 队列头两字节 */
             uint32_t rv = d->sio_rxb0 | (d->sio_rxb1 << 8);
-            d->sio_rxb0 = 0xFFu; d->sio_rxb1 = 0xFDu;   /* 后续=按键 idle 词 */
+            d->sio_rxb0 = 0xFFu; d->sio_rxb1 = 0xFFu; d->sio_rxf = 0u;
+            return rv;                    /* 弹队后=FF 残留(idle) */
+        }
+        if (d->sio_rxf) {                 /* 尾字节 */
+            uint32_t rv = d->sio_rxb0;
+            d->sio_rxb0 = 0xFFu; d->sio_rxf = 0u;
             return rv;
         }
+        return 0xFFu;                      /* 楔24: 无数据=FF 残留(引擎 flush 阈值 >=0x91 需 FF) */
         break;                            /* (落到 shadow 默认) */
     case 0x1044:
         /* 楔22 实验(门控): LIBSN SIO 引擎(0x8003F670) TX 泵等 1044 非零。
@@ -222,14 +228,24 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
          * 本门控直接投递"无垫"完成态: RX=2 字节(0xFFFF 应答) 供游戏读取收敛 init。 */
         /* 楔23 活体钉字(8006587c): 游戏 SIO 引擎等 1044 bit0(TX 就绪)再发送。
          * 真机 bit0=ready; RX 计数 bits3-6 亦就绪=无垫应答在位。 */
-        d->sio1044 = (val & 0xFFu) ? (1u | (2u << 3)) : 0u; d->sio_rxf = (val & 0xFFu) ? 2u : 0u;
-        d->sio_rxb0 = 0x5Au; d->sio_rxb1 = 0x5Du; break;
+        d->sio1044 = (val & 0xFFu) ? 1u : 0u; d->sio_rxf = 0u;  /* 楔24: baud=仅 ready, 应答等 TX 触发 */
+        break;
     case 0x104A: d->reg104a_shadow = val; break;        /* 楔22: 104A 控制字 RMW 保留 */
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
         /* 楔22: 游戏清 RX 状态(sh $zero,($v0) 800520b4 活体钉字) = 请求-响应模型 →
          * 自动投递无垫完成态(RX 2×0xFF + 计数 2 字节) */
-        if (!(val & 0xFFu)) { d->sio1044 = 1u | (2u << 3);   /* 楔23: 保 bit0 ready(800666f4 等) */
-            d->sio_rxf = 2u; d->sio_rxb0 = 0x5Au; d->sio_rxb1 = 0x5Du; }  /* 重投在位应答 */
+        /* 楔24 正字(800666f4 全解): 游戏软件 BUSY 标志 [800D6AF4]&v1 位0 等待清零 =
+         * 真机"字节传输完成"。TX 字节写 1040 → 同步完成传输: 清 [6AF4] bit0 +
+         * 排 2 字节在位应答(5A 5D) + 1044=ready。 */
+        d->sio1044 = 1u | (2u << 3); d->sio_rxf = 2u;
+        d->sio_rxb0 = 0x5Au; d->sio_rxb1 = 0x5Du;
+        if (d->core) {
+            uint32_t bw = 0;
+            void *q = psx_translate((const psx_core_t *)d->core, 0x800D6AF4u, &bw);
+            if (q && bw == PSX_WIN_RAM) {
+                uint32_t f; memcpy(&f, q, 4); f &= ~1u; memcpy(q, &f, 4);
+            }
+        }
         break;
     case 0x1104: case 0x1114: case 0x1124:
         { int t3 = (off - 0x1104) / 0x10;
