@@ -1494,6 +1494,28 @@ int cmd_retail_probe(int argc, char **argv)
             hpc[bi] = 0;
         }
     }
+        {   /* 楔46 PTRSCAN=lo:hi:tlo:thi 活体全域 RAM 指针扫描(探针尾):
+             * 输出值∈[tlo,thi) 的 word 地址 = 找二段自解压码里的函数指针表。
+             * 双门纪律: gpa∈[0x80000000,0x88000000) + win==RAM。 */
+            const char *ps = getenv("RETAIL_PTRSCAN");
+            if (ps) {
+                uint32_t lo=0,hi=0,tlo=0,thi=0;
+                if (sscanf(ps, "%x:%x:%x:%x", &lo, &hi, &tlo, &thi) == 4) {
+                    unsigned shown = 0;
+                    for (uint32_t gpa = lo & ~3u; gpa + 4 <= hi && gpa < 0x88000000u; gpa += 4u) {
+                        if (gpa < 0x80000000u) continue;
+                        uint32_t ww; void *pq = psx_translate(&core, gpa, &ww);
+                        if (!pq || ww != PSX_WIN_RAM) continue;
+                        uint32_t v = *(const uint32_t*)pq;
+                        if (v >= tlo && v < thi) {
+                            printf("PTR gpa=%08x val=%08x\n", gpa, v);
+                            if (++shown >= 400u) { printf("PTR ...truncated\n"); break; }
+                        }
+                    }
+                    printf("PTR total=%u\n", shown);
+                }
+            }
+        }
         {   /* DUMPHOT_GPA=0x... 导出该处 RAM 供 capstone 静态钉等待条件 (task-147) */
         const char *dg = getenv("DUMPHOT_GPA");
         if (dg) {
