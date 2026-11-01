@@ -497,3 +497,21 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   vsync 票需 VBlank 事件→游戏 vsync 回调(C2 表/enq 另一链号)路, AddVSyncCallback
   登记面(A0:32/33 VSync/VSyncCallbacks)CALLTR 从未观测到调用 = 游戏可能用 b0 事件面。
 - 门控实验面(retail): RPBUDGET=100000 + RP/RFE/RFEALWAYS 组合下链火全通过。
+
+## 楔30 (SESSION-169): [800D43A8] 身份翻案 = DMA 队列槽分配计数器(非 vsync!)
+- **静态+活体交叉钉字**(EXE 文件图像 8006Axxx-8006Bxxx, 该区活体已被覆写为字符串池=
+  二段自解包挪作数据用, 反汇编必须用文件图像 vaddr=data_vaddr(80010000)+off-0x800):
+  - `8006B27C` = **NewDmaQueue 服务**: a0=通道 id(→[80076CE4+ch*4] CB 指针表), 前置
+    CB!=NULL && a1!=0 && **[43A8]<8**; 体=8005F494 环 alloc→写类型 2→名字拷贝→8005FD4C→
+    `43A8++`(8006B35C-370)。
+  - `8006AB04` = DMA 队列等待环(`slt s1,[43A8]` 扫描); `8006B770` = 8 槽上限判定。
+  - `8006B21C-22C` = 初始化清零 [43A4]/[43A0]/**[43A8]**+8×0x10 槽(与 RWATCH 观测的
+    两清零写者 8005b754/8005faf0 区分: 后者是 memset 路过)。
+- **翻案**: 楔20 "主循环等 [800D43A8] vsync 计数器" 定性错误 → 实为 **DMA 队列管理器**
+  状态字。真因链修正: CD 通道 CB 注册表 [80076CE4+ch*4] **全 0 且无人写**(RWATCH 60M
+  零命中) → NewDmaQueue 永不可进 → 43A8 恒 0 → CD DMA 队列不存在 → 无 CD 读(cds=0 一致)。
+- 楔31 战役: 找 **CD 通道 open/CB 注册**服务(写 [76CE4+ch*4] 的路径; 候选=驱动 vtable
+  InitDevice(80052690 族) 的 CD 通道分支或 rootcall B0 CARD/Dopen 面), 使其在 pad 链
+  就绪后被调用。完成判据: [76CE4]≠0 → NewDmaQueue 到达 → 43A8>0 → cd cmds>0。
+- 方法论钉: 活体 dump 区可能是数据池(nop 海+字符串), 静态文件图像对**未覆写区**仍有效;
+  判"文件 vs 活体"谁真 = 先比对已知运行 pc 区, 分区对待。
