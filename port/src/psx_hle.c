@@ -232,6 +232,10 @@ static uint32_t ha_printf(psx_hle_t *h, uint32_t cmd)
     return 0;
 }
 
+/* B(0x18) ResetEntryInt [S sys.s]: 解除 EntryInterrupt 挂钩, 返回旧 hook。 */
+static uint32_t hb_reset_entry(psx_hle_t *h, uint32_t cmd)
+{ (void)cmd; uint32_t old = h->entry_hook; h->entry_hook = 0u; V0(old); return 0; }
+
 static uint32_t hb_card_idle(psx_hle_t *h, uint32_t cmd)
 { (void)cmd; V0(0u); return 0; }
 static uint32_t hb_card_fail(psx_hle_t *h, uint32_t cmd)
@@ -438,6 +442,7 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->b[0x12] = ha_nosync_ok; h->b[0x13] = ha_nosync_ok; h->b[0x14] = ha_nosync_ok; /* InitPAD 族 */
     h->b[0x56] = hb_getc0;  h->b[0x57] = hb_getb0;
     h->b[0x5B] = hb_pad_clear;  /* [S] ChangeClearPAD */
+    h->b[0x18] = hb_reset_entry;  /* [S] ResetEntryInt */
     h->b[0x19] = hb_hook_entry;  /* [S] HookEntryInt (北斗神拳首 UNK 实证) */
     h->b[0x35] = hb_b35_policy;  /* 未定名假设面(低锚), 见上注 */
     h->a[0x13] = ha_bsetjmp;  h->a[0x14] = ha_blongjmp;  /* [S] sys.s */
@@ -1162,7 +1167,19 @@ int cmd_retail_probe(int argc, char **argv)
             hpc[bi] = 0;
         }
     }
-        printf("RETAIL_PROBE gpu vframes=%u gp_ticks=%u gp0=%u gp1=%u fill=%u xfer=%u tri=%u spr=%u\n",
+        {   /* DUMPHOT_GPA=0x... 导出该处 RAM 供 capstone 静态钉等待条件 (task-147) */
+        const char *dg = getenv("DUMPHOT_GPA");
+        if (dg) {
+            uint32_t base = (uint32_t)strtoul(dg, 0, 0) & ~0xFFu;
+            char fname[64]; snprintf(fname, sizeof fname, "/tmp/dumphot_%08x.bin", base);
+            FILE *df = fopen(fname, "wb"); uint32_t www;
+            if (df) { for (uint32_t z = 0; z < 0x300u; z += 4u) {
+                        void *qd = psx_translate(&core, base + z, &www);
+                        uint32_t vv = qd ? *(uint32_t*)qd : 0u; fwrite(&vv, 4, 1, df); }
+                      fclose(df); printf("DUMPHOT %s base=%08x\n", fname, base); }
+        }
+    }
+    printf("RETAIL_PROBE gpu vframes=%u gp_ticks=%u gp0=%u gp1=%u fill=%u xfer=%u tri=%u spr=%u\n",
            dev.vframes, gpu.frames, gpu.gp0_words, gpu.gp1_words, gpu.fill_px, gpu.xfer_px, gpu.tri_px, gpu.spr_px);
     for (int z = 0; z < 48; z++) if (h.unk[z].cnt)
         printf("UNK vec=%02x cmd=%02x n=%u\n", h.unk[z].key >> 8, h.unk[z].key & 0xFF, h.unk[z].cnt);
