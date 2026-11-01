@@ -129,17 +129,22 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
         /* 楔23: 真机 pad 应答序列 0x5A 0x5D(digital 在位)。游戏引擎以非 5A 头判超时
          * (0xFFFF 无垫面被 800666f4 等待环拒 → 走 80052024 失败清理 sh zero [50C2])。 */
-        if (d->sio_rxf > 1u) {            /* 楔24: RX 队列头两字节 */
-            uint32_t rv = d->sio_rxb0 | (d->sio_rxb1 << 8);
-            d->sio_rxb0 = 0xFFu; d->sio_rxb1 = 0xFFu; d->sio_rxf = 0u;
-            return rv;                    /* 弹队后=FF 残留(idle) */
+        {   /* 楔27: 字节弹出 FIFO(size=1 读消费一字节; size>=2 读两字节) */
+            uint32_t v = 0xFFFFFFFFu;
+            if (!d->sio_rxf) return 0xFFu;   /* idle 残留=FF */
+            if (size == 1) {
+                v = d->sio_rxq[d->sio_rxq_rp & 15u];
+                d->sio_rxq_rp++; d->sio_rxf--;
+            } else {
+                uint32_t b0 = d->sio_rxq[d->sio_rxq_rp & 15u];
+                uint32_t b1 = d->sio_rxf > 1u ? d->sio_rxq[(d->sio_rxq_rp + 1) & 15u] : 0xFFu;
+                uint32_t pop = d->sio_rxf > 1u ? 2u : 1u;
+                d->sio_rxq_rp += pop; d->sio_rxf -= pop;
+                v = b0 | (b1 << 8);
+            }
+            if (d->sio1044) d->sio1044 = 1u | (d->sio_rxf << 3);
+            return v;
         }
-        if (d->sio_rxf) {                 /* 尾字节 */
-            uint32_t rv = d->sio_rxb0;
-            d->sio_rxb0 = 0xFFu; d->sio_rxf = 0u;
-            return rv;
-        }
-        return 0xFFu;                      /* 楔24: 无数据=FF 残留(引擎 flush 阈值 >=0x91 需 FF) */
         break;                            /* (落到 shadow 默认) */
     case 0x1044:
         /* 楔22 实验(门控): LIBSN SIO 引擎(0x8003F670) TX 泵等 1044 非零。
@@ -248,8 +253,14 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
         /* 楔24 正字(800666f4 全解): 游戏软件 BUSY 标志 [800D6AF4]&v1 位0 等待清零 =
          * 真机"字节传输完成"。TX 字节写 1040 → 同步完成传输: 清 [6AF4] bit0 +
          * 排 2 字节在位应答(5A 5D) + 1044=ready。 */
-        d->sio1044 = 1u | (2u << 3); d->sio_rxf = 2u;
-        d->sio_rxb0 = 0x5Au; d->sio_rxb1 = 0x5Du;
+        {   /* 楔27: TX 命令 → 排队 8 字节完整 pad 应答(5A 5D 5C 5D + idle 键) */
+            static const uint8_t reply[8] = {0x5A,0x5D,0x5C,0x5D,0xFF,0xFF,0xFF,0xFF};
+            for (int qi = 0; qi < 8; qi++) d->sio_rxq[(d->sio_rxq_rp + d->sio_rxf + qi) & 15u] = reply[qi];
+            d->sio_rxf += 8u; if (d->sio_rxf > 15u) d->sio_rxf = 15u;
+            d->sio1044 = 1u | (d->sio_rxf << 3);
+            /* 楔27 翻案入账: [80076194] "TTY 缓冲"预置实验无效(结构未钉=臆测, 已撤)。
+             * 线程 A 等的是 PCB(800D6880)+0x3C RX 端口直读路, RX FIFO 面已对。 */
+        }
         if (d->core) {
             uint32_t bw = 0;
             void *q = psx_translate((const psx_core_t *)d->core, 0x800D6AF4u, &bw);
@@ -383,6 +394,16 @@ static void cd_push(psx_dev_t *d, uint8_t b)
 { if (d->cd_resp_n < 8) d->cd_resp[d->cd_resp_n++] = b; }
 static uint32_t cd_param_loc(const psx_dev_t *d)   /* param1..3 = 24-bit LBA LE */
 { return (uint32_t)d->cd_param[1] | ((uint32_t)d->cd_param[2] << 8) | ((uint32_t)d->cd_param[3] << 16); }
+
+/* 楔27: probe 面 CD/DMA 统计(读观测, 零副作用) */
+void psx_dev_probe_stats(void *dv)
+{
+    struct psx_dev_s *d = (struct psx_dev_s *)dv;
+    printf("RETAIL_PROBE cd cmds=%u cmd=%02x sect_valid=%d bytes=%u resp_n=%u loc=%u mode=%02x\n",
+           d->cd_cmds, d->cd_cmd, d->cd_sect_valid, d->cd_bytes, d->cd_resp_n, d->cd_loc, d->cd_mode);
+    printf("RETAIL_PROBE dma3 madr=%08x bcr=%08x chcr=%08x i_stat=%04x i_mask=%04x\n",
+           d->dma_madr[3], d->dma_bcr[3], d->dma_chcr[3], d->i_stat, d->i_mask);
+}
 
 static void cd_cmd_exec(struct psx_dev_s *d0, uint8_t cmd)
 { psx_dev_t *d = d0;

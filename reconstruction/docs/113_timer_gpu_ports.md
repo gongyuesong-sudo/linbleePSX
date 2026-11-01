@@ -446,3 +446,21 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   **卡点收敛为单点**: DMA3 票申了但 CDROM 传输服务未回流(票触发→CD 读→完成票/计数器)。
 - 楔27 战役: DMA3 票 → CDROM 读 → 完成回环(游戏侧 DMA 票消费 + [80076198] 状态推进);
   候选缺口 = ReadSector 命令字面(CD 命令寄存器观测面)或 DMA3 CHCR 触发未被票路径走到。
+
+## 楔27 (SESSION-166): CD 面零命令钉字 + SIO 字节弹出 FIFO + 新 probe 统计面
+- **决定性观测**: 北斗神拳 100M **cd cmds=0**(CDROM 零命令!) + dma3 全 0 + i_stat=0x0001
+  + i_mask=0x000D = 游戏从未走到真 CD 读代码; 楔26 "DMA3 票→CD 回环"候选降级——
+  票是 LIBSN 内部 RAM 票, 未到硬件面。卡点仍收敛于 vsync 计数器 [800D43A8] 无递增者。
+- 新 probe 面: `psx_dev_probe_stats`(cd cmds/cmd/sect/resp + dma3 三件套 + i_stat/mask,
+  读观测零副作用, 每次 --retail-probe 自动打)。
+- SIO RX 转正字节弹出 FIFO(证据=80065854 lbu RX 端口直读): size=1 弹一字节,
+  size>=2 弹两; 无数据恒 0xFF idle; 1044 计数随 pop 递减。TX 命令→排 8 字节完整
+  pad 应答 [5A 5D 5C 5D FF FF FF FF]。
+- 线程 A 画像更新(qtr RPREG): PCB 基 **s0=800D6880**, RX/TX 端口=pcb+0x3C/+0x40
+  (均=1F801040), 命令字 s1 ∈ {0x88 poll, 0x22 config}(由 pcb+0x44 状态选: flush 写
+  FF → ≥9 → 0x22 路); 66f4 返回 v0=0 的入参实态=entry v1(≠收尾打印值), 前次"立即
+  放行"推断部分失真(打印点寄存器已被 6764 覆写)。
+- 翻案撤回: [80076194] "TTY 缓冲"预置实验无效(布局未钉=臆测, 已撤并留档)。
+- 楔28 战役: 线程 A fire 内**逐字节**钉 RX 消费序列(SIOTR+fire 窗口联合), 判 8 字节
+  应答哪一槽位不被接受; 或对照 psx-spx pad 时序(0x01 0x42 → 5A 5F/5A 5D 模式字)。
+- 回归: 八面 118P/0F; 北斗 100M served=172 exc=1; 三国志2 exc=0。

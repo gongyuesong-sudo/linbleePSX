@@ -1501,6 +1501,7 @@ int cmd_retail_probe(int argc, char **argv)
           printf("RETAIL_TIM T%d ctrl=%04x cnt=%u target=%u last_sync=%llu\n", t,
                  dev.timer_ctrl[t], dev.timer_cnt[t], dev.timer_target[t],
                  (unsigned long long)dev.timer_last_sync[t]); }
+    if (h.dev) { extern void psx_dev_probe_stats(void *dev); psx_dev_probe_stats(h.dev); }
     printf("RETAIL_PROBE gpu vframes=%u gp_ticks=%u gp0=%u gp1=%u fill=%u xfer=%u tri=%u spr=%u\n",
            dev.vframes, gpu.frames, gpu.gp0_words, gpu.gp1_words, gpu.fill_px, gpu.xfer_px, gpu.tri_px, gpu.spr_px);
         if (getenv("RCHIST")) {
@@ -1559,9 +1560,12 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
             if (!rp_budget) { const char *be = getenv("RETAIL_RPBUDGET");
                               rp_budget = be ? (uint32_t)strtoul(be, NULL, 0) : 4000u; }
             uint32_t half_pc = 0, qtr_pc = 0;
+            uint32_t rpv[6] = {0};
             for (uint32_t st = 0; st < rp_budget; st++) {
                 psx_cpu_step(c);
-                if (st == rp_budget / 4) qtr_pc = c->pc;
+                if (st == rp_budget / 4) { qtr_pc = c->pc;
+                    rpv[0]=c->gpr[2]; rpv[1]=c->gpr[3]; rpv[2]=c->gpr[4];
+                    rpv[3]=c->gpr[16]; rpv[4]=c->gpr[17]; rpv[5]=c->gpr[22]; }
                 if (st == rp_budget / 2) half_pc = c->pc;
                 /* 楔25: done 判据放宽=pc 落回 trampoline(其首条=jr $ra)即算返回,
                  * 旧双等判据因延迟槽差一拍永不命中(done=0 假象, 楔24 复勘) */
@@ -1575,8 +1579,9 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
             if (getenv("RETAIL_RPTRACE")) {
                 fprintf(stderr, "RPFIRE node=%08x func=%08x done=%d pc=%08x npc=%08x ra=%08x qtr=%08x half=%08x\n",
                         head, func, done, c->pc, c->npc, c->gpr[31], qtr_pc, half_pc);
-                fprintf(stderr, "RPREG v0=%08x v1=%08x a0=%08x a1=%08x s2=%08x s3=%08x\n",
-                        c->gpr[2], c->gpr[3], c->gpr[4], c->gpr[5], c->gpr[18], c->gpr[19]);
+                fprintf(stderr, "RPREG v0=%08x v1=%08x a0=%08x a1=%08x s2=%08x s3=%08x | qtr v0=%08x v1=%08x a0=%08x s0=%08x s1=%08x t6=%08x\n",
+                        c->gpr[2], c->gpr[3], c->gpr[4], c->gpr[5], c->gpr[18], c->gpr[19],
+                        rpv[0], rpv[1], rpv[2], rpv[3], rpv[4], rpv[5]);
             }
             c->branch_pending = 0;
         }
