@@ -245,6 +245,10 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
             if (q && bw == PSX_WIN_RAM) {
                 uint32_t f; memcpy(&f, q, 4); f &= ~1u; memcpy(q, &f, 4);
             }
+            /* 楔25 实验(RETAIL_SIOBUSY=值): 覆写游戏软 BUSY 状态字 */
+            { const char *bs = getenv("RETAIL_SIOBUSY");
+              if (bs) { void *r = psx_translate((const psx_core_t *)d->core, 0x800D6AF4u, &bw);
+                        if (r && bw == PSX_WIN_RAM) { uint32_t v = (uint32_t)strtoul(bs, NULL, 0); memcpy(r, &v, 4); } } }
         }
         break;
     case 0x1104: case 0x1114: case 0x1124:

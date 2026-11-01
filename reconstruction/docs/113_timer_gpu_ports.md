@@ -414,3 +414,19 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 楔25 候选: (a) fire 预算 4000→加大/分段, 追踪 vsync 分支到 43A8 递增;
   (b) 8005F318 设备表初始化 8×0x18 结构(800D42E0)语义; (c) 主线程 GetTickWait mode3
   与 [80076188] 指针调用环。
+
+## 楔25 (SESSION-164): fire done 判据修正 + 链火线程 A 画像全解 + T3 映射钉
+- done=0 假象根除: 旧判据 `pc==tramp && npc==tramp` 因 `jr $ra` 延迟槽差一拍永不命中。
+  修正=pc 落回 tramp 即 done; 另加 RETAIL_RPBUDGET(默认 4000) 可配预算 + qtr/half 采样 pc + RPREG 行。
+- 链火线程画像(budget=100k): PCB-B done=1 正常返回; PCB-A 在 80065a2c↔800658a4 外层多轮
+  循环跑 SIO 多字节序列(qtr/half 采样 pc=66f4/6768 快速通过, **非卡死=在推进**)。
+- 800666F4 语义终正字(RPREG 钉 v1=0x91 入参): a0=v1&0xFFFF=0x91 >= [6AF4]=0 走 6714
+  Timer-target 累加路(1128=T3 target=0 → +0), 6758 `v0=(a0-[6AF4]) >= [6AF8]=0x91` → **v0=1 即过**
+  =该函数在当前状态立即放行; 楔24 "永卡"定性撤销, 是外层序列在跑。
+- T3 寄存器映射钉字(本世代 dev 面): count=0x1120 / ctrl=0x1124 / target=0x1128
+  (游戏 SIO 引擎读 1124 ctrl&0x200 + 1128 target; target=0 走免累加路, 无需强推 T3)。
+- [800D43A8] 计数器: 30M/100M 均=0, 仅有的两写者(8005b754 memset 环 / 8005faf0 初始化)
+  都是清零; **递增者仍未现身** = 楔26 主攻(候选: dispatcher SIO 序列完成后的 post 处理)。
+- RETAIL_SIOBUSY=值 实验面(覆写游戏软 BUSY [6AF4])已入库门控, 本楔实测未改变行为(佐证
+  [6AF4]=0 放行正字)。
+- 回归: 八面 118P/0F; 默认门北斗 200M served=172 exc=1 (楔24 同); 三国志2 exc=0; 窗口 hw=1。

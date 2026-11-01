@@ -1555,9 +1555,17 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
             int done = 0;
             /* 楔21: handler 内部有 T1 tick 等待环(80051a04 活体钉字) →
              * fire 内必须同步推进设备 tick/帧(= mini-scheduler, 不碰主线程上下文) */
-            for (uint32_t st = 0; st < 4000u; st++) {
+            static uint32_t rp_budget = 0;
+            if (!rp_budget) { const char *be = getenv("RETAIL_RPBUDGET");
+                              rp_budget = be ? (uint32_t)strtoul(be, NULL, 0) : 4000u; }
+            uint32_t half_pc = 0, qtr_pc = 0;
+            for (uint32_t st = 0; st < rp_budget; st++) {
                 psx_cpu_step(c);
-                if (c->pc == tramp && c->npc == tramp) { done = 1; break; }
+                if (st == rp_budget / 4) qtr_pc = c->pc;
+                if (st == rp_budget / 2) half_pc = c->pc;
+                /* 楔25: done 判据放宽=pc 落回 trampoline(其首条=jr $ra)即算返回,
+                 * 旧双等判据因延迟槽差一拍永不命中(done=0 假象, 楔24 复勘) */
+                if (c->pc == tramp) { done = 1; break; }
                 if ((st & 63u) == 63u && h->dev) {
                     /* 时钟纯函数模型: 推 CPU 主钟 → dev sync 折叠 T1/IRQ (每拍 564456) */
                     c->cycles += 564456u / 16u;
@@ -1565,8 +1573,10 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
                 }
             }
             if (getenv("RETAIL_RPTRACE")) {
-                fprintf(stderr, "RPFIRE node=%08x func=%08x done=%d pc=%08x npc=%08x ra=%08x\n",
-                        head, func, done, c->pc, c->npc, c->gpr[31]);
+                fprintf(stderr, "RPFIRE node=%08x func=%08x done=%d pc=%08x npc=%08x ra=%08x qtr=%08x half=%08x\n",
+                        head, func, done, c->pc, c->npc, c->gpr[31], qtr_pc, half_pc);
+                fprintf(stderr, "RPREG v0=%08x v1=%08x a0=%08x a1=%08x s2=%08x s3=%08x\n",
+                        c->gpr[2], c->gpr[3], c->gpr[4], c->gpr[5], c->gpr[18], c->gpr[19]);
             }
             c->branch_pending = 0;
         }
