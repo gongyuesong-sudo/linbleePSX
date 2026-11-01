@@ -369,3 +369,30 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   5A 01 pad 数据)+ RX FIFO + 1044 bits3-6 计数 + 104A ACK 语义; CDROM 命令链(dev 1820 面游戏
   尚未发到=被 SIO 卡前)后置。完成判据=[800750C2]≠0 → 驱动进渲染 → gp0 真实命令(tri/spr>0)。
 - 回归面: 八面 118P/0F; 北斗神拳 600M 基线(excit=1 pc 8003F53C); 全部门控关。
+
+## 楔23 (SESSION-162): SIO pad 引擎握手过关 + HookEntryInt/失败清理两翻案
+- SIO 握手全通过(RETAIL_RFEALWAYS+RP+SIOTR 组合): 游戏 SIO 引擎(80065824 活体钉字)
+  等 **1044 bit0=TX ready**(楔22 只投 RX 计数不置 bit0=仍死等) → baud 写投 `1|(2<<3)`;
+  RX 头应答须 **0x5A 5D**(在位 digital pad)——0xFFFF 无垫头被 800666f4 判超时。
+  过关证据: SIOTR 无再轮询(1044→1040→104A ack→清 0 全序列), pc 80051134→800511E8 推进。
+- **翻案1: "失败清理函数"(80052004-2c)= LIBSN 内核 idle 函数**: sh zero(I_STAT ack 全源)→
+  B0:17 trap(ReturnFromException 收尾)→ `sh zero,[50C2]`(entry-pump 标志清零=正常态)。
+  80051d68 返回 [50C2]=0 → 走 800511e4 idle 路 = **健康路径**, 非失败门。楔22 定性修正。
+- **翻案2: [800750F8] "hook 槽"= SetEntryjmpBuf 的 ra 保存槽**(80052324=SetEntryjmpBuf 活体
+  全帧 sw ra/gp/sp/fp/s0-s7 @0x2C 字节; 80051e0c a0=800750F8 实证)。E11→E10 演化=内核存帧
+  所致, 非 HookEntryInt 消费。真 entry 派发目标不变(80051E10)。
+- 现状: SIO/事件/中断/内核 idle 全线活; 主线程等 [800D43A8] vsync 计数器 > 0, 递增者=
+  entry 派发器 vsync 分支, 其触发权=每 VBlank 一次 RFE 派发(现仅 2 次=派发器 EXL=1 常驻
+  泵内等 LIBSN 用户态队列票, 票源=vsync handler, handler 又等 GPU ready [80075050]=1F801814
+  字读非零=**GPUREAD 恒 0 面**, 环未闭合)。
+- 楔24 战役: 闭合"派发器泵 ↔ vsync handler ↔ GPU ready"环; 候选=1044 面同型的 GPUSTAT
+  就绪语义核对([80075050]=1F801814 lhu 读值语义) + RFE 派发每帧一次的 stat ack 时机。
+- 门控矩阵(全默认关): RFE/RFEALWAYS/RP/RFEV0/SIOTR/SIO(baud 影子自动随 RP 面)。
+- 楔23 续(链火内最后驻点全解): dispatcher func=80065270 → 80065824 SIO TX 引擎(活体反汇编
+  全环: 8006587c 等 1044 bit0→800658bc sb ~s3 写 1040 发字节→800658a4 jal 800666f4)。
+  **800666F4 = 超时检查器**(非 1044 轮询): 读 Timer2(1124/1128)+RAM 阈值表 [800D6AF4]/[800D6AF8],
+  v0=not-timed-out; 800666f0 循环自清 [6AF4]=0(RWATCH 实证)。RPFIRE done=0 驻 pc=80066764 =
+  等待环条件 `a0<[800D6AF4]`=0 永假 → beqz 直落 = **等的是游戏侧 TX 完成计数器递增**, 非 MMIO。
+  该计数器递增者=真机 DMA/中断收尾(0x807FFE98 高栈帧), 环闭合需 CDINT/SIO INT 到 I_STAT 面。
+- 楔23 新增实验面(默认关): VBlank 票注入 [80075040]=1(fire 内, RP 门控)——60M 无消费方,
+  泵不读该槽(假说降级); [6AF4] 面为真候选。

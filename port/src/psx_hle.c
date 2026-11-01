@@ -1576,6 +1576,9 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
      * LIBSN 内核 resume 泵出口条件)。全 enabled 事件置 fired=1(内核自消票)。 */
     for (uint32_t z = 0; z < HLE_EV_MAX; z++)
         if (h->ev[z].class != 0xFFFFFFFFu && h->ev[z].enabled) h->ev[z].fired = 1;
+    /* 楔23: LIBSN 内核 entry 泵等 [80075040] 中断源票字(60M RWATCH=无人投,
+     * 真机=BIOS VBlank 服务写 0x2421 类掩码) → 本门控投 VBlank 位(bit0)。 */
+    if (hle_rd32(h, 0x80075040u) == 0u) hle_wr32(h, 0x80075040u, 1u);
     /* BIOS VBlank: ChangeClearRCnt 登记地址自动清零 (楔20) */
     for (int z = 0; z < 8; z++)
         if (h->clrcnt[z].addr >= 0x80000000u) hle_wr32(h, h->clrcnt[z].addr, 0u);

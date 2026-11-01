@@ -188,11 +188,13 @@ static int irq_check(psx_cpu_t *c)
 
 /* task-158 楔19: pc 历史环(崩溃即时取证) — cached enable, 禁用零开销 */
 uint32_t g_pcring[64]; uint32_t g_pcring_i; static int g_pcring_on = -1;
+uint32_t g_cur_pc;
 int psx_cpu_step(psx_cpu_t *c)
 {
     g_psx_cpu_sysclk = c->cycles;
     if (g_pcring_on<0) g_pcring_on = getenv("RETAIL_PCRING")!=NULL;
     if (g_pcring_on) { g_pcring[g_pcring_i & 63u] = c->pc; g_pcring_i++; }
+    g_cur_pc = c->pc;   /* 楔23: MMIO trace 归属定位(零开销单 store) */
     if (c->core && c->core->dev) psx_dev_sync((psx_dev_t *)c->core->dev);
     if (irq_check(c)) { c->cycles++; return 0; }
     uint32_t insn;

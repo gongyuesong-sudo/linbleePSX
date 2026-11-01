@@ -89,8 +89,11 @@ static uint32_t sio_log_n = 0;
 static void sio_trace(const char *rw, uint32_t off, uint32_t val, int size)
 {
     if (sio_tr < 0) sio_tr = getenv("RETAIL_SIOTR") ? 1 : 0;
-    if (!sio_tr || off < 0x1040 || off > 0x104F || sio_log_n++ >= 400u) return;
-    fprintf(stderr, "SIOTR %s off=%04x size=%d val=%08x\n", rw, off, size, val);
+    if (!sio_tr || off < 0x1040 || off > 0x104F) return;
+    { extern uint32_t g_cur_pc;
+      /* 楔23: 只记状态转变或限量(轮询循环按 pc 聚合由外部 uniq 处理) */
+      if (sio_log_n++ < 600u)
+          fprintf(stderr, "SIOTR %s off=%04x size=%d val=%08x pc=%08x\n", rw, off, size, val, g_cur_pc); }
 }
 static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size);
 static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size);
@@ -124,7 +127,13 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
         return rdy | 0x18u; }
     case 0x1825: return 0;                        /* CDSEL/CONFIG 回读 */
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
-        if (d->sio_rxf) return 0xFFFFu;   /* 楔22 门控: RX 数据=无垫应答 0xFF 对 */
+        /* 楔23: 真机 pad 应答序列 0x5A 0x5D(digital 在位)。游戏引擎以非 5A 头判超时
+         * (0xFFFF 无垫面被 800666f4 等待环拒 → 走 80052024 失败清理 sh zero [50C2])。 */
+        if (d->sio_rxf) {
+            uint32_t rv = d->sio_rxb0 | (d->sio_rxb1 << 8);
+            d->sio_rxb0 = 0xFFu; d->sio_rxb1 = 0xFDu;   /* 后续=按键 idle 词 */
+            return rv;
+        }
         break;                            /* (落到 shadow 默认) */
     case 0x1044:
         /* 楔22 实验(门控): LIBSN SIO 引擎(0x8003F670) TX 泵等 1044 非零。
@@ -211,12 +220,16 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1048:                                        /* 楔22 门控: baud 写=TX 启动面 */
         /* psx-spx 1044 位义: bits3-6=RX 字节计数。真机 BIOS 于 VBlank 自动 pad 轮询;
          * 本门控直接投递"无垫"完成态: RX=2 字节(0xFFFF 应答) 供游戏读取收敛 init。 */
-        d->sio1044 = (val & 0xFFu) ? (2u << 3) : 0u; d->sio_rxf = (val & 0xFFu) ? 2u : 0u; break;
+        /* 楔23 活体钉字(8006587c): 游戏 SIO 引擎等 1044 bit0(TX 就绪)再发送。
+         * 真机 bit0=ready; RX 计数 bits3-6 亦就绪=无垫应答在位。 */
+        d->sio1044 = (val & 0xFFu) ? (1u | (2u << 3)) : 0u; d->sio_rxf = (val & 0xFFu) ? 2u : 0u;
+        d->sio_rxb0 = 0x5Au; d->sio_rxb1 = 0x5Du; break;
     case 0x104A: d->reg104a_shadow = val; break;        /* 楔22: 104A 控制字 RMW 保留 */
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
         /* 楔22: 游戏清 RX 状态(sh $zero,($v0) 800520b4 活体钉字) = 请求-响应模型 →
          * 自动投递无垫完成态(RX 2×0xFF + 计数 2 字节) */
-        if (!(val & 0xFFu) && d->sio_rxf) { d->sio1044 = 2u << 3; }
+        if (!(val & 0xFFu)) { d->sio1044 = 1u | (2u << 3);   /* 楔23: 保 bit0 ready(800666f4 等) */
+            d->sio_rxf = 2u; d->sio_rxb0 = 0x5Au; d->sio_rxb1 = 0x5Du; }  /* 重投在位应答 */
         break;
     case 0x1104: case 0x1114: case 0x1124:
         { int t3 = (off - 0x1104) / 0x10;

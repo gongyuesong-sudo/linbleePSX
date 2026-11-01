@@ -44,7 +44,8 @@ typedef struct psx_dev_s {
     /* C2 私有握手窗 (docs/62) */
     uint32_t reg1044;
     uint32_t sio1044;          /* 楔22 门控实验: 1044 RX 计数影子(bits3-6) */
-    uint32_t sio_rxf;          /* 楔22: RX 有数据标志(1040 读=0xFFFF 无垫) */
+    uint32_t sio_rxf;          /* 楔22: RX 有数据标志 */
+    uint32_t sio_rxb0, sio_rxb1;   /* 楔23: RX 头两字节(5A 5D 在位应答) */
     uint32_t reg104a_shadow;   /* 楔22: 104A 写影(为 pad 状态机铺路) */
     uint32_t spu_fifo, spu_stat, spu_xfer;  /* SPU 传输面 v1 (task-143) */
     uint32_t dma_madr[7], dma_bcr[7], dma_chcr[7];  /* DMA 通道寄存器组 (task-145) */
