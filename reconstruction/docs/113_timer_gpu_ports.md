@@ -755,3 +755,13 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 楔47 钉法: (a) 找 overlay **载入时刻** —— RWATCH 布点 `[80060A38]`(首写 pc
   = 载入器, 亦是二段解压器本尊!); (b) 载入器即楔30 悬案的 8006A-B 覆写方,
   钉住它=同时拿到 overlay 来源与 CD API 调用线程。
+
+## 楔46 补钉: RWATCH `[80060A38]` 6M 内**零 CPU 写** → 两假说待楔47 分辨
+- (a) overlay 在冷启动装载期由**自研 LoadImage memcpy** 投放(RWATCH 只捕 CPU
+  store, 天然静默) → 那 CD 区就是盘上 EXE 的一部分, 与文件像的差异 =
+  **/tmp/hok_exe.bin 抽取本身错位/截段**(header 字段 PC=6021fd76 等是垃圾 =
+  抽取起点可疑!)。
+- (b) 真运行期 DMA/二段覆写。
+- 楔47 第一步 = 从盘上按真 EXE header 重抽 hok_exe(对照 port 内建 LoadImage
+  路径打印的真实 ddst/sz), 重做 live-vs-file 对照, 才许再引"overlay"结论。
+  (楔44/45 的"静态零调用者"与本轮"overlay 实锤"**同受此疑**, 标记待复核。)
