@@ -17,7 +17,7 @@
 #include "psx_core.h"
 #include <stdint.h>
 
-typedef struct {
+typedef struct psx_cpu_s {
     uint32_t gpr[32];
     uint32_t hi, lo;
     uint32_t pc, npc;
@@ -28,6 +28,10 @@ typedef struct {
     int      branch_pending;
     uint32_t branch_target;
     const psx_core_t *core;
+    /* 清洁房楔2 (task-129): HLE rootcall 钩 —— 返回 1=已服务(当普通指令续跑),
+     * 0/NULL=走原 syscall 异常路径 (BIOS 装载态保持既有语义) */
+    int (*on_rootcall)(struct psx_cpu_s *c);
+    void *hle;           /* psx_hle_t* 不透明柄 */
 } psx_cpu_t;
 
 extern int psx_cm_enabled;   /* 楔7b: cache 维护写弃开关(默认 1) */

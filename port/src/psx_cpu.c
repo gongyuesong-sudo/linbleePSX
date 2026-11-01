@@ -147,7 +147,9 @@ int psx_cpu_step(psx_cpu_t *c)
         case 0x09: SETG(rd ? rd : 31, c->npc); took = 1; tgt = G(rs); break; /* jalr */
         case 0x0A: if (G(rt) == 0) SETG(rd, G(rs)); break;          /* movz */
         case 0x0B: if (G(rt) != 0) SETG(rd, G(rs)); break;          /* movn */
-        case 0x0C: enter_exception(c, 8u, 0, 0); c->cycles++; return 0;  /* syscall */
+        case 0x0C:                                              /* syscall */
+            if (c->on_rootcall && c->on_rootcall(c) == 1) break; /* HLE 已服务=普通指令续跑(cycles 走尾部簿记) */
+            enter_exception(c, 8u, 0, 0); c->cycles++; return 0;
         case 0x0D: enter_exception(c, 9u, 0, 0); c->cycles++; return 0;  /* break */
         case 0x10: SETG(rd, c->hi); break;                          /* mfhi */
         case 0x11: c->hi = G(rs); break;                            /* mthi */

@@ -1,0 +1,442 @@
+/*
+ * psx_hle.c —— 清洁房战役楔2: HLE 内核 v1 (task-129)
+ *
+ * 零 BIOS: 本文件不含任何 SCPH 字节; 命令号=公开 ABI 逐槽登记(见 psx_hle.h 来源标记)。
+ * 派发: CPU 钩 on_rootcall 在 syscall 指令处截获 ——
+ *   $t2=0xA0/0xB0/0xC0 → A/B/C 表[$t1]; 否则 a0∈{1,2} 临界区; 余者走原异常。
+ * A/B/C 返回 = 虚拟 `jr $ra`: 向量页 vec+4 处预放 jr $ra + nop, syscall 自然
+ * 落到它, 延迟槽语义天然正确。
+ */
+#include "psx_hle.h"
+#include <stdio.h>
+#include <string.h>
+
+/* ---------- guest 访存小工 (fixed 态=恒等指针) ---------- */
+static uint32_t *gw(psx_hle_t *h, uint32_t gpa)
+{ uint32_t w; void *p = psx_translate(h->core, gpa, &w); return p ? (uint32_t *)p : NULL; }
+static uint32_t hle_rd32(psx_hle_t *h, uint32_t gpa)
+{ uint32_t *p = gw(h, gpa & ~3u); uint32_t v = 0; if (p) memcpy(&v, p, 4); return v; }
+static int hle_wr32(psx_hle_t *h, uint32_t gpa, uint32_t v)
+{ uint32_t *p = gw(h, gpa & ~3u); if (!p) return -1; *p = v; return 0; }
+static uint8_t hle_rd8(psx_hle_t *h, uint32_t gpa)
+{ uint32_t w; void *p = psx_translate(h->core, gpa, &w); return p ? *(uint8_t *)p : 0; }
+static int hle_cprange(psx_hle_t *h, uint32_t dst, uint32_t src, uint32_t n)
+{ /* 全对齐前提(内核域用法); 逐字搬运, 越界=失败 */
+    uint32_t w1, w2; void *pd = psx_translate(h->core, dst, &w1);
+    void *ps = psx_translate(h->core, src, &w2);
+    if (!pd || !ps || (n & 3u)) return -1;
+    memcpy(pd, ps, n); return 0;
+}
+static int hle_rdstr(psx_hle_t *h, uint32_t gpa, char *buf, int cap)
+{ int i = 0; for (; i < cap - 1; i++) { char c = (char)hle_rd8(h, gpa + (uint32_t)i); buf[i] = c; if (!c) break; } buf[i] = 0; return i; }
+
+/* ---------- EvHeader 公开布局: [0]next [1]size [2]mode [3]id [4]attr ---------- */
+static void evhdr_init(psx_hle_t *h, uint32_t elem, uint32_t size, uint32_t mode,
+                       uint32_t id, uint32_t attr, uint32_t next)
+{
+    hle_wr32(h, elem + 0, next); hle_wr32(h, elem + 4, size);
+    hle_wr32(h, elem + 8, mode); hle_wr32(h, elem + 12, id); hle_wr32(h, elem + 16, attr);
+}
+
+uint32_t hle_heap_alloc(psx_hle_t *h, uint32_t size)
+{
+    if (!h->heap_ready || (size & 3u)) return 0;
+    uint32_t need = size + 20u;
+    if (h->heap_brk + need > h->heap_base + h->heap_size) return 0;
+    uint32_t elem = h->heap_brk;
+    evhdr_init(h, elem, size, 1, elem + 20, 0, 0);
+    /* 清载荷区 */
+    for (uint32_t i = 0; i + 20u < need; i += 4) hle_wr32(h, elem + 20u + i, 0);
+    h->heap_brk += need;
+    return elem;
+}
+int hle_heap_free(psx_hle_t *h, uint32_t elem)
+{
+    if (!h->heap_ready || elem < h->heap_base || elem + 20u > h->heap_brk) return -1;
+    uint32_t size = hle_rd32(h, elem + 4);
+    if (elem + 20u + size > h->heap_brk) return -1;
+    h->heap_brk = elem; /* v1 栈式: 只允许 LIFO 尾释放 */
+    return 0;
+}
+
+/* ---------- PSX-EXE 装载 (公开头布局: 0x10=pc 0x14=gp 0x18=vaddr 0x1C=psize
+ * 0x20=taddr 0x24=tsize 0x28=spbase 0x2C=spdesc 0x30/0x34=a_params) ---------- */
+int hle_load_exe(psx_hle_t *h, uint32_t hdr_gpa, uint32_t dest, uint32_t *pc_out, uint32_t *gp_out)
+{
+    if ((hdr_gpa & 0x7FFu) != 0u) return -2;           /* PSX-EXE 镜像按 2KB 对齐 */
+    uint32_t pc = hle_rd32(h, hdr_gpa + 0x10), gp = hle_rd32(h, hdr_gpa + 0x14);
+    uint32_t vaddr = hle_rd32(h, hdr_gpa + 0x18), psize = hle_rd32(h, hdr_gpa + 0x1C);
+    uint32_t taddr = hle_rd32(h, hdr_gpa + 0x20), tsize = hle_rd32(h, hdr_gpa + 0x24);
+    uint32_t a_pc = hle_rd32(h, hdr_gpa + 0x30), a_gp = hle_rd32(h, hdr_gpa + 0x34);
+    if (a_pc != 0u) pc = a_pc;
+    if (a_gp != 0u) gp = a_gp;
+    uint32_t d = dest ? dest : vaddr;
+    if ((psize & 3u) || (tsize & 3u)) return -3;
+    if (hle_cprange(h, d, hdr_gpa + 0x800, psize) != 0) return -4;
+    if (tsize && hle_cprange(h, taddr, hdr_gpa + 0x800 + psize, tsize) != 0) return -5;
+    if (pc_out) *pc_out = pc;
+    if (gp_out) *gp_out = gp;
+    return 0;
+}
+
+/* ---------- A 族 handler (参数移位 ABI: p0=$a0...) ---------- */
+#define A_P(n) h->cpu->gpr[4 + (n)]
+#define A_STK(n) hle_rd32(h, h->cpu->gpr[29] + 0x10u + 4u * (uint32_t)(n))
+#define V0(v_) do { h->cpu->gpr[2] = (uint32_t)(v_); } while (0)
+
+static uint32_t ha_loadimage(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    uint32_t pc = 0, gp = 0;
+    int r = hle_load_exe(h, A_P(0), A_P(1), &pc, &gp);
+    if (r == 0) { hle_wr32(h, A_P(2), pc); hle_wr32(h, A_P(3), gp); V0(0); }
+    else V0(-1);
+    return 0;
+}
+static uint32_t ha_execute(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    uint32_t first = A_P(0), entry = A_STK(0), sp = A_STK(1), fp = A_STK(2);
+    (void)fp;
+    if (first == 1u && entry != 0u) {
+        h->armed = 1; h->exe_pc = entry;
+        h->exe_sp = sp ? sp : 0x801FFFF0u;
+        h->exe_gp = h->cpu->gpr[28];
+        V0(0);
+    } else V0(-1); /* first==0 (继续循环) v1 未接主循环 = 明确拒绝, 不静默 */
+    return 0;
+}
+static uint32_t ha_initheaps(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    h->heap_base = A_P(0); h->heap_size = A_P(1);
+    h->heap_brk = (h->heap_base + 3u) & ~3u;
+    h->heap_ready = (h->heap_base != 0u && h->heap_size >= 64u);
+    if (!h->heap_ready) V0(-1); /* 无文档返回值, 失败面自研登记 */
+    return 0;
+}
+static uint32_t ha_putchar(psx_hle_t *h, uint32_t cmd)
+{ (void)cmd; fputc((int)(A_P(0) & 0xFFu), stdout); V0(A_P(0)); return 0; }
+static uint32_t ha_puts(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; char buf[256];
+    hle_rdstr(h, A_P(0), buf, (int)sizeof buf);
+    fputs(buf, stdout); fflush(stdout); V0(1); return 0;
+}
+static uint32_t ha_nosync_ok(psx_hle_t *h, uint32_t cmd) { (void)cmd; V0(0); return 0; }
+static uint32_t ha_setconf(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; /* a0..a3 = 四 CONFIG 字 (公开布局 {tmd,libcard,zone,apps}) */
+    h->config[0] = A_P(0); h->config[1] = A_P(1);
+    h->config[2] = A_P(2); h->config[3] = A_P(3);
+    V0(0); return 0;
+}
+static uint32_t ha_getconf(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; /* a0=目标 guest CONFIG* */
+    for (int i = 0; i < 4; i++) if (hle_wr32(h, A_P(0) + 4u * (uint32_t)i, h->config[i])) { V0(-1); return 0; }
+    V0(0); return 0;
+}
+
+/* ---------- B 族 ---------- */
+static uint32_t hb_alloc(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; uint32_t e = hle_heap_alloc(h, A_P(0));
+    V0(e ? e + 20u : 0); return 0;
+}
+static uint32_t hb_free(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; V0(hle_heap_free(h, A_P(0) ? A_P(0) - 20u : 0) == 0 ? 0 : -1); return 0;
+}
+static int ev_slot(psx_hle_t *h, uint32_t handle)
+{ (void)h; int s = (int)(handle & 0xFFu);
+  return (handle >> 24 == 0x19u && s < (int)HLE_EV_MAX) ? s : -1; }
+static uint32_t hb_open_event(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    for (uint32_t i = 0; i < HLE_EV_MAX; i++)
+        if (h->ev[i].class == 0xFFFFFFFFu) {
+            h->ev[i].class = A_P(0); h->ev[i].vector = A_P(1);
+            h->ev[i].enabled = 0; h->ev[i].fired = 0;
+            V0((0x19u << 24) | i); return 0;
+        }
+    V0(-1); return 0;
+}
+static uint32_t hb_close_event(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; int s = ev_slot(h, A_P(0));
+    if (s >= 0) { h->ev[s].class = 0xFFFFFFFFu; h->ev[s].enabled = h->ev[s].fired = 0; V0(0); } else V0(-1);
+    return 0;
+}
+#define HB_FLAG(v_, en_, f_) \
+    static uint32_t v_(psx_hle_t *h, uint32_t cmd) { (void)cmd; int s = ev_slot(h, A_P(0)); \
+        if (s < 0) { V0(-1); return 0; } h->ev[s].en_ = (f_); V0(0); return 0; }
+HB_FLAG(hb_enable_event, enabled, 1)
+HB_FLAG(hb_disable_event, enabled, 0)
+HB_FLAG(hb_deliver_event, fired, 1)
+HB_FLAG(hb_wait_event, fired, 0)
+static uint32_t hb_test_event(psx_hle_t *h, uint32_t cmd)
+{ (void)cmd; int s = ev_slot(h, A_P(0)); V0(s >= 0 ? (uint32_t)h->ev[s].fired : 0); return 0; }
+/* GetC0Table/GetB0Table [R]: 指向 guest RAM 静态表 (内容 v1=桩地址数组) */
+#define HLE_C0_GPA 0x801FE000u
+#define HLE_B0_GPA 0x801FE100u
+static uint32_t hb_getc0(psx_hle_t *h, uint32_t cmd) { (void)cmd; V0(HLE_C0_GPA); return 0; }
+static uint32_t hb_getb0(psx_hle_t *h, uint32_t cmd) { (void)cmd; V0(HLE_B0_GPA); return 0; }
+
+/* ---------- C 族 ---------- */
+static uint32_t hc_install_exc(psx_hle_t *h, uint32_t cmd)
+{ (void)cmd; (void)h; V0(0); return 0; } /* 向量页本就归内核, no-op */
+static uint32_t hc_sysinitmem(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; /* a0=stack_addr a1=stack_size a2=text_size a3=data_size */
+    uint32_t base = A_P(0), size = A_P(1);
+    h->cpu->gpr[29] = base + size - 16u;
+    V0(0); return 0;
+}
+static uint32_t hc_enq(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; /* a0=list*, a1=entry* —— v1 记账链自研: [entry]=list, list=head */
+    uint32_t list = A_P(0), entry = A_P(1), head = hle_rd32(h, list);
+    hle_wr32(h, entry, head); hle_wr32(h, list, entry); V0(entry); return 0;
+}
+static uint32_t hc_deq(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; uint32_t list = A_P(0), entry = A_P(1);
+    uint32_t head = hle_rd32(h, list);
+    if (head == entry) { hle_wr32(h, list, hle_rd32(h, entry)); V0(entry); return 0; }
+    while (head) { uint32_t nx = hle_rd32(h, head); if (nx == entry) { hle_wr32(h, head, hle_rd32(h, entry)); V0(entry); return 0; } head = nx; }
+    V0(0); return 0;
+}
+
+/* ---------- 表安装 ---------- */
+void psx_hle_uninstall(psx_hle_t *h)
+{ if (h->cpu) { h->cpu->on_rootcall = NULL; h->cpu->hle = NULL; h->cpu = NULL; } }
+
+int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
+{
+    if (!h || !cpu || !core) return -1;
+    memset(h, 0, sizeof *h);
+    h->cpu = cpu; h->core = core; h->last_unknown = -1;
+    for (uint32_t i = 0; i < HLE_EV_MAX; i++) h->ev[i].class = 0xFFFFFFFFu;
+    /* A [D+P] 0x28 LoadImage / [P] 0x29 Execute / [S+R] 0x39 InitHeap
+     * [S+R] 0x3C putchar / [S+R] 0x3E puts / [S] 0x44 FlushCache
+     * [S] 0x70 _bu_init 0x71 _96_init 0x72 _96_remove / [S] 0x99 0x9C 0x9D 0x9F 0xB4 */
+    h->a[0x28] = ha_loadimage; h->a[0x29] = ha_execute; h->a[0x39] = ha_initheaps;
+    h->a[0x3C] = ha_putchar;   h->a[0x3E] = ha_puts;    h->a[0x44] = ha_nosync_ok;
+    h->a[0x70] = ha_nosync_ok; h->a[0x71] = ha_nosync_ok; h->a[0x72] = ha_nosync_ok;
+    h->a[0x99] = ha_nosync_ok; h->a[0x9C] = ha_setconf; h->a[0x9D] = ha_getconf;
+    h->a[0x9F] = ha_nosync_ok; h->a[0xB4] = ha_nosync_ok;
+    /* B [S/R] */
+    h->b[0x00] = hb_alloc;  h->b[0x01] = hb_free;
+    h->b[0x07] = hb_deliver_event; h->b[0x08] = hb_open_event; h->b[0x09] = hb_close_event;
+    h->b[0x0A] = hb_wait_event;   h->b[0x0B] = hb_test_event;
+    h->b[0x0C] = hb_enable_event; h->b[0x0D] = hb_disable_event;
+    h->b[0x12] = ha_nosync_ok; h->b[0x13] = ha_nosync_ok; h->b[0x14] = ha_nosync_ok; /* InitPAD 族 */
+    h->b[0x56] = hb_getc0;  h->b[0x57] = hb_getb0;
+    /* C [S] */
+    h->c[0x02] = hc_enq; h->c[0x03] = hc_deq; h->c[0x07] = hc_install_exc;
+    h->c[0x08] = hc_sysinitmem; h->c[0x0A] = ha_nosync_ok;
+    /* C0/B0 表桩区: 清零可被 GetC0Table 消费 */
+    for (uint32_t i = 0; i < 0x40u; i += 4u) { hle_wr32(h, HLE_C0_GPA + i, 0); hle_wr32(h, HLE_B0_GPA + i, 0); }
+    /* 向量页: 0x80/0xA0/0xB0/0xC0 syscall; +4=jr $ra; +8=nop */
+    const uint32_t SYSCALL = 0x0000000Cu, JRA = 0x03E00008u, NOP_ = 0u;
+    const uint32_t vecs[] = { 0x80u, 0xA0u, 0xB0u, 0xC0u };
+    for (unsigned i = 0; i < 4u; i++) {
+        hle_wr32(h, vecs[i], SYSCALL);
+        hle_wr32(h, vecs[i] + 4, JRA);
+        hle_wr32(h, vecs[i] + 8, NOP_);
+    }
+    cpu->on_rootcall = psx_hle_rootcall;
+    cpu->hle = h;
+    return 0;
+}
+
+static int g_hle_depth; /* 重入护栏 (handler→guest 回调→rootcall) */
+int psx_hle_rootcall(psx_cpu_t *cpu)
+{
+    psx_hle_t *h = (psx_hle_t *)cpu->hle;
+    if (!h || g_hle_depth > 4) return 0;
+    uint32_t vec = cpu->gpr[9], cmd = cpu->gpr[8];
+    hle_a_fn fn = NULL;
+    g_hle_depth++;
+    if (vec == 0xA0u && cmd < HLE_A_SLOTS)      { h->last_vec = 0xA0u; fn = h->a[cmd]; }
+    else if (vec == 0xB0u && cmd < HLE_B_SLOTS) { h->last_vec = 0xB0u; fn = h->b[cmd]; }
+    else if (vec == 0xC0u && cmd < HLE_C_SLOTS) { h->last_vec = 0xC0u; fn = h->c[cmd]; }
+    else if (vec == 0u && cpu->gpr[4] == 1u) {   /* EnterCriticalSection [S] */
+        uint32_t st = cpu->cop0[12];
+        h->last_vec = 0u; h->last_cmd = 1u;
+        cpu->gpr[2] = (st & 0x401u) == 0x401u ? 1u : 0u;
+        cpu->cop0[12] = st & ~0x401u; h->nlog++;
+        g_hle_depth--; return 1;
+    } else if (vec == 0u && cpu->gpr[4] == 2u) { /* ExitCriticalSection [S] */
+        h->last_vec = 0u; h->last_cmd = 2u;
+        cpu->cop0[12] |= 0x401u; cpu->gpr[2] = 0u; h->nlog++;
+        g_hle_depth--; return 1;
+    } else { g_hle_depth--; return 0; }          /* 非内核号 → 原异常路径 */
+    h->last_cmd = cmd; h->nlog++;
+    if (fn) fn(h, cmd);
+    else { V0(-1); h->last_unknown = (int)((h->last_vec << 8) | cmd); }
+    g_hle_depth--;
+    return 1;
+}
+
+/* ---------- --hle-selftest (task-129 验收面) ---------- */
+#define EM(a, v) *(volatile uint32_t *)(uintptr_t)(a) = (v)
+#define RDW(a)   (*(volatile uint32_t *)(uintptr_t)(a))
+#define HCHK(cond_, name_) do { \
+    printf("HLE_TEST %s: %s\n", name_, (cond_) ? "PASS" : "FAIL"); \
+    if (!(cond_)) bad++; } while (0)
+
+/* 经真 trampoline 几何发起 rootcall: 置 $t1/$t2/参 → pc=vec-4, npc=vec
+ * (vec+4 预放 jr $ra 使返回+延迟槽天然正确) */
+static void hle_go(psx_cpu_t *c, uint32_t vec, uint32_t cmd, uint32_t ra)
+{
+    c->gpr[8] = cmd; c->gpr[9] = vec; c->gpr[31] = ra;
+    c->branch_pending = 0; c->pc = vec - 4; c->npc = vec;
+}
+
+int cmd_hle_selftest(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    psx_core_t core; psx_cpu_t c; psx_hle_t h; int bad = 0;
+    if (psx_core_init_fixed(&core) != 0) { printf("HLE_EV fixed init FAIL\n"); return 1; }
+    if (psx_load_bios(&core) != 0) { printf("HLE_EV bios unset load FAIL\n"); return 1; }
+    psx_cpu_reset(&c, &core);
+    if (psx_hle_install(&h, &c, &core) != 0) { printf("HLE_EV install FAIL\n"); return 1; }
+    const uint32_t P = 0x80010000u, D = 0x80020000u, E = 0x80030000u;
+
+    /* V1 向量页几何: 0x80/0xA0/0xB0/0xC0 = syscall+jr$ra+nop, 且 0 镜像同页 */
+    uint32_t wa, wb;
+    HCHK(RDW(0x800000A0u) == 0x0000000Cu && RDW(0x800000A4u) == 0x03E00008u &&
+         RDW(0x800000A8u) == 0u && RDW(0x80000080u) == 0x0000000Cu &&
+         psx_translate(&core, 0x000000A0u, &wa) == psx_translate(&core, 0x800000A0u, &wb),
+         "v1_vectors_geom");
+    /* V2 表几何: A/B/C 槽数 + 已登记锚位非空 */
+    HCHK(HLE_A_SLOTS == 0xC0u && HLE_B_SLOTS == 0x60u && HLE_C_SLOTS == 0x20u &&
+         h.a[0x39] != NULL && h.a[0x28] != NULL && h.b[0x56] != NULL && h.c[0x02] != NULL,
+         "v2_table_geom");
+    /* V3 A 族往返: putchar 'X' (v0='X', nlog+1, 返回落 ra 域) */
+    c.gpr[0] = 0u;
+    hle_go(&c, 0xA0u, 0x3Cu, P); c.gpr[4] = 'X';
+    EM(P + 0, (0x09 << 26) | (0 << 21) | (20 << 16) | 5);   /* addiu $20=5 着陆标记 */
+    psx_cpu_run(&c, 4); /* syscall, jr$ra, 槽nop, 着陆addiu */
+    HCHK(c.gpr[2] == 'X' && h.nlog == 1u && h.last_vec == 0xA0u && h.last_cmd == 0x3Cu &&
+         c.gpr[20] == 5u, "v3_a_trampoline_putchar");
+    /* V4 未登记号诚实面: A(0x30) → v0=-1 + last_unknown 记账, 不抛异常 */
+    uint32_t e0 = c.exc_n;
+    hle_go(&c, 0xA0u, 0x30u, P); EM(P + 0, 0u);
+    psx_cpu_run(&c, 3);
+    HCHK(c.gpr[2] == 0xFFFFFFFFu && h.last_unknown == (int)((0xA0u << 8) | 0x30u) &&
+         c.exc_n == e0, "v4_unknown_honest_minus1");
+    /* V5 裸 a0 临界区: Enter(v0=前态,IE+IM5 清)→Exit(置回) */
+    c.cop0[12] = 0x401u;
+    EM(P + 0, 0x0000000Cu);                                   /* syscall Enter */
+    EM(P + 4, (0x09 << 26) | (0 << 21) | (20 << 16) | 5);     /* addiu $20=5 */
+    EM(P + 8, 0x0000000Cu);                                   /* syscall Exit */
+    EM(P + 12, (0x08 << 26) | (0 << 21) | (21 << 16) | 7);    /* addi $21=7 */
+    c.gpr[4] = 1u; c.gpr[8] = 0u; c.gpr[9] = 0u;
+    c.pc = P - 4; c.npc = P; c.branch_pending = 0;
+    psx_cpu_run(&c, 1);                                       /* Enter */
+    uint32_t v_in = c.gpr[2], st_mid = c.cop0[12];
+    c.gpr[4] = 2u;                                            /* 换 Exit 号(步间隙) */
+    psx_cpu_run(&c, 3);                                       /* addiu, Exit, addi */
+    HCHK(v_in == 1u && (st_mid & 0x401u) == 0u && (c.cop0[12] & 0x401u) == 0x401u &&
+         c.gpr[21] == 7u, "v5_raw_critical_section");
+    /* V6 A(0x39) InitHeap + B(0x00/0x01) 堆往返 (EvHeader 公开 5-word 布局) */
+    hle_go(&c, 0xA0u, 0x39u, P); c.gpr[4] = D + 0x2000u; c.gpr[5] = 0x400u; EM(P, 0u);
+    psx_cpu_run(&c, 3);
+    HCHK(h.heap_ready == 1 && h.heap_base == D + 0x2000u, "v6_initheap");
+    hle_go(&c, 0xB0u, 0x00u, P); c.gpr[4] = 0x20u; c.gpr[5] = 0u;
+    psx_cpu_run(&c, 3);
+    uint32_t p0 = c.gpr[2];
+    HCHK(p0 >= D + 0x2000u + 20u && p0 < D + 0x2400u &&
+         RDW(p0 - 20u + 4u) == 0x20u, "v6b_kernel_alloc_evhdr");
+    EM(p0, 0xDEADBEEFu);
+    hle_go(&c, 0xB0u, 0x01u, P); c.gpr[4] = p0;
+    psx_cpu_run(&c, 3);
+    HCHK(c.gpr[2] == 0u && h.heap_brk == D + 0x2000u, "v6c_kernel_free");
+    /* V7 A(0x28) LoadImage: 合成 PSX-EXE (pc/gp/data/code) */
+    for (uint32_t i = 0; i < 0x800u / 4u; i++) EM(E + 4u * i, 0u);
+    EM(E + 0x10, 0x80040011u); EM(E + 0x14, 0x80040000u);
+    EM(E + 0x18, 0x80040000u); EM(E + 0x1C, 0x10u);           /* data 16B */
+    EM(E + 0x20, 0x80041000u); EM(E + 0x24, 0x0Cu);           /* code 12B */
+    for (uint32_t i = 0; i < 0x10u; i++) EM(E + 0x800u + 4u * i, 0x11110000u + i);
+    EM(E + 0x800u + 0x10u, (0x08 << 26) | (0 << 21) | (2 << 16) | 0x222);   /* addi $2=0x222 */
+    EM(E + 0x800u + 0x14u, 0x08004110u);                                     /* j 0x8004110 */
+    EM(E + 0x800u + 0x18u, 0u);
+    EM(D + 0x100, 0u); EM(D + 0x104, 0u);
+    hle_go(&c, 0xA0u, 0x28u, P); c.gpr[4] = E; c.gpr[5] = 0u;
+    c.gpr[6] = D + 0x100u; c.gpr[7] = D + 0x104u;
+    psx_cpu_run(&c, 3);
+    printf("HLE_EV v7 r=%x pc=%x gp=%x d0=%x dC=%x code=%x\n", c.gpr[2], RDW(D + 0x100u),
+           RDW(D + 0x104u), RDW(0x80040000u), RDW(0x8004000Cu), RDW(0x80041000u));
+    HCHK(c.gpr[2] == 0u && RDW(D + 0x100u) == 0x80040011u && RDW(D + 0x104u) == 0x80040000u &&
+         RDW(0x80040000u) == 0x11110000u && RDW(0x8004000Cu) == 0x11110003u &&
+         RDW(0x80041000u) == ((0x08u << 26) | (2u << 16) | 0x222u), "v7_loadimage_exe");
+    /* V8 A(0x29) Execute(first=1) 武装 (entry/sp 走栈参 sp+0x10..) */
+    c.gpr[29] = D + 0x1200u;
+    EM(D + 0x1210u, 0x80041000u); EM(D + 0x1214u, D + 0x1000u); EM(D + 0x1218u, 0u);
+    hle_go(&c, 0xA0u, 0x29u, P); c.gpr[4] = 1u;
+    psx_cpu_run(&c, 3);
+    HCHK(h.armed == 1 && h.exe_pc == 0x80041000u && h.exe_sp == D + 0x1000u && c.gpr[2] == 0u,
+         "v8_execute_arm");
+    /* V9 B 事件环: open→enable→test0→deliver→test1→wait→close */
+    hle_go(&c, 0xB0u, 0x08u, P); c.gpr[4] = 0x00u; c.gpr[5] = 0x19u;
+    c.gpr[6] = 0x01u; c.gpr[7] = 0u; psx_cpu_run(&c, 3);
+    uint32_t evh = c.gpr[2];
+    HCHK(evh != 0u && evh != 0xFFFFFFFFu, "v9a_open_event");
+    hle_go(&c, 0xB0u, 0x0Cu, P); c.gpr[4] = evh; psx_cpu_run(&c, 3);
+    hle_go(&c, 0xB0u, 0x0Bu, P); c.gpr[4] = evh; psx_cpu_run(&c, 3);
+    uint32_t t0 = c.gpr[2];
+    hle_go(&c, 0xB0u, 0x07u, P); c.gpr[4] = evh; psx_cpu_run(&c, 3);
+    hle_go(&c, 0xB0u, 0x0Bu, P); c.gpr[4] = evh; psx_cpu_run(&c, 3);
+    uint32_t t1 = c.gpr[2];
+    hle_go(&c, 0xB0u, 0x0Au, P); c.gpr[4] = evh; psx_cpu_run(&c, 3);
+    hle_go(&c, 0xB0u, 0x09u, P); c.gpr[4] = evh; psx_cpu_run(&c, 3);
+    uint32_t cl = c.gpr[2];
+    HCHK(t0 == 0u && t1 == 1u && cl == 0u, "v9b_event_lifecycle");
+    /* V10 GetC0Table/GetB0Table [R 锚] */
+    hle_go(&c, 0xB0u, 0x56u, P); psx_cpu_run(&c, 3); uint32_t c0 = c.gpr[2];
+    hle_go(&c, 0xB0u, 0x57u, P); psx_cpu_run(&c, 3); uint32_t b0 = c.gpr[2];
+    HCHK(c0 == HLE_C0_GPA && b0 == HLE_B0_GPA && c0 != b0, "v10_c0b0_tables");
+    /* V11 C(0x02/0x03) enq/deq 链表 */
+    EM(D + 0x1300u, 0u); EM(D + 0x1310u, 0u); EM(D + 0x1320u, 0u);
+    hle_go(&c, 0xC0u, 0x02u, P); c.gpr[4] = D + 0x1300u; c.gpr[5] = D + 0x1310u; psx_cpu_run(&c, 3);
+    hle_go(&c, 0xC0u, 0x02u, P); c.gpr[4] = D + 0x1300u; c.gpr[5] = D + 0x1320u; psx_cpu_run(&c, 3);
+    HCHK(RDW(D + 0x1300u) == D + 0x1320u && RDW(D + 0x1320u) == D + 0x1310u, "v11a_enq_chain");
+    hle_go(&c, 0xC0u, 0x03u, P); c.gpr[4] = D + 0x1300u; c.gpr[5] = D + 0x1320u; psx_cpu_run(&c, 3);
+    HCHK(c.gpr[2] == D + 0x1320u && RDW(D + 0x1300u) == D + 0x1310u, "v11b_deq_mid");
+    /* V12 devboot 族 + FlushCache: 恒 0 记账 */
+    uint32_t n0 = h.nlog;
+    hle_go(&c, 0xA0u, 0x70u, P); psx_cpu_run(&c, 3); uint32_t r1 = c.gpr[2];
+    hle_go(&c, 0xA0u, 0x71u, P); psx_cpu_run(&c, 3); uint32_t r2 = c.gpr[2];
+    hle_go(&c, 0xA0u, 0x72u, P); psx_cpu_run(&c, 3); uint32_t r3 = c.gpr[2];
+    hle_go(&c, 0xA0u, 0x44u, P); psx_cpu_run(&c, 3); uint32_t r4 = c.gpr[2];
+    HCHK(r1 == 0u && r2 == 0u && r3 == 0u && r4 == 0u && h.nlog == n0 + 4u, "v12_devboot_nosync");
+    /* V13 SetConf/GetConf 往返 */
+    uint32_t cfg[4] = { 0x020C0000u, 0x80028000u, 0x800287C0u, 0x80028FC0u };
+    for (int i = 0; i < 4; i++) EM(D + 0x1400u + 4u * (uint32_t)i, cfg[i]);
+    hle_go(&c, 0xA0u, 0x9Cu, P);
+    c.gpr[4] = cfg[0]; c.gpr[5] = cfg[1]; c.gpr[6] = cfg[2]; c.gpr[7] = cfg[3];
+    psx_cpu_run(&c, 3);
+    hle_go(&c, 0xA0u, 0x9Du, P); EM(D + 0x1400u, 0u); EM(D + 0x1404u, 0u);
+    c.gpr[4] = D + 0x1400u; psx_cpu_run(&c, 3);
+    /* GetConf v1=写 4 字连续域(a0), config 存四参数字: 校验前两字 */
+    HCHK(c.gpr[2] == 0u && RDW(D + 0x1400u) == cfg[0] && RDW(D + 0x1404u) == cfg[1] &&
+         h.config[3] == cfg[3], "v13_conf_roundtrip");
+    /* V14 puts: guest 串直出宿主 */
+    memcpy((void *)(uintptr_t)(D + 0x1500u), "HLE_WEDGE_OK\n", 14u);
+    hle_go(&c, 0xA0u, 0x3Eu, P); c.gpr[4] = D + 0x1500u; psx_cpu_run(&c, 3);
+    HCHK(c.gpr[2] == 1u, "v14_puts_stdout");
+    /* V15 卸载回原异常路径 */
+    psx_hle_uninstall(&h);
+    uint32_t ex0 = c.exc_n;
+    hle_go(&c, 0xA0u, 0x3Cu, P); psx_cpu_run(&c, 1);
+    HCHK(c.exc_n == ex0 + 1u && c.cop0[13] == (8u << 2), "v15_uninstall_falls_back_to_exception");
+
+    printf("HLE_EV bad=%d nlog=%u\n", bad, h.nlog);
+    psx_core_free(&core);
+    if (bad) { printf("HLE SELFTEST FAIL (%d)\n", bad); return 1; }
+    printf("HLE CORE SELFTEST PASS\n");
+    return 0;
+}
