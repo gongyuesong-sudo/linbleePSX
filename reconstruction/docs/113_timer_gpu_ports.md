@@ -855,3 +855,25 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 死锁闭环推断(待验): 真机 BIOS ISR 处理命令→置完成→泵 dequeue→计数回落;
   本核该处理面缺位 → 计数恒>1 → 永不 dequeue → 状态机永停 state=2。
 - 会话内未改运行时代码(临时 JHIST 诊断面已回净, 树 0 diff, 八面基线不变)。
+
+## 楔52 (SESSION-190): gdb 硬件观察点翻案"绕过 CPU store"——真卡点=state 槽永停 2
+- **翻案楔51 写者悬案**: "命令块写者不走 CPU store"不成立。gdb 硬件观察点
+  (host 指针级, 跨 KSEG 别名全捕获) 直接命中 `st_val(val=30)` 经 CPU 步执行,
+  guest pc=80060AC0(**issuer 60A38 函数体内**, 非经入口 fallin)。RWATCH 漏检的
+  真因=旧挂表时点在 loader 之后(装载/InitCdSys 段写全漏)+窗口边界必须与
+  gpa 原值同制(KSEG0 全值), 归一化边界对比 gpa 原值=恒假。
+- **翻案楔51 "永不 dequeue"**: 观察点序列=60AC0 投 30 → 60C38 递减 30→21,
+  队列健康流动。**WPC 采样路不跑帧尾外驱泵**(楔50 已钉)同样毒化 CD 引擎路
+  数字(60AC0 gdb 实锤 vs WPC 060ac=0), 凡 WPC 零须对默认跑+gdb 双验。
+- **新单点钉死**: state 槽 `[80076D9C]` 全 8M 观察史只一击=InitCdSys `6080C`
+  置 2(块 6D94: +0 命令字节=0,+8 state=2,+0xC=0xE,+0x10=0x15 初值), 之后再
+  无 state 写。门 `60974`(state reader 104 万发)读 `[6D9C + idx*4]` 恒 2。
+  真机 state 2→…→1 推进=BIOS CD 命令执行面; issuer 仅 GETSTAT 一发,
+  后续命令投递者(609F8 post, 静态零 jal)未再触发。
+- RETAIL_CDSTAT=1 恒置 1 实验致 cause=28(epc=801F0000)——state 与队列实态
+  脱钩即崩, 单变量纪律复证; 须走"命令完成语义"正路而非值注入。
+- 方法转正: **gdb host 指针观察点脚本模板**(break psx_dev_vframe → python
+  psx_translate(d->core,gpa,&g_watch_lo) → watch -l → continue 循环打
+  guest pc+val) 是本战役写者取证金标准, 完胜 RWATCH/WPC。
+- 楔53 目标: 钉 issuer 为何仅一次(609F8/60AC0 caller 链活体) + 命令完成面
+  (60EE0 完成处理器)触发条件; 八面 8/8 保持, 临时诊断面全撤树净。
