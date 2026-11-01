@@ -210,6 +210,7 @@ static uint32_t ha_open(psx_hle_t *h, uint32_t cmd)
     char *base = path;   /* 取 ':' / '\' 后基名 */
     for (char *q = path; *q; q++) if (*q == ':' || *q == '\\' || *q == '/') base = q + 1;
     int fi = psx_disc_find(d, base);
+    if (getenv("HLE_RDTR")) fprintf(stderr, "HLEOPEN %s -> %s\n", path, fi < 0 ? "NOTFOUND" : d->files[fi].name);
     if (fi < 0) { V0(-1); return 0; }
     for (int i = 0; i < 8; i++) if (!d->fd[i].used) {
         d->fd[i].used = 1; d->fd[i].fidx = fi; d->fd[i].pos = 0; V0(0x1100u | (uint32_t)i); return 0;
@@ -235,7 +236,10 @@ static uint32_t ha_read(psx_hle_t *h, uint32_t cmd)
         if (err) break;
         done += take; pos += take;
     }
-    d->fd[s].pos = pos; V0(done); return 0;
+    d->fd[s].pos = pos;
+    if (getenv("HLE_RDTR")) fprintf(stderr, "HLEREAD fd=%x %s pos=%u len=%u done=%u\n",
+                                    A_P(0), d->files[d->fd[s].fidx].name, pos, A_P(2), done);
+    V0(done); return 0;
 }
 static uint32_t ha_lseek(psx_hle_t *h, uint32_t cmd)
 {
@@ -887,6 +891,20 @@ int cmd_retail_probe(int argc, char **argv)
         if (hot) for (uint32_t z = 0; z < n; z += 64u) { psx_cpu_step(&cpu); hpc[(cpu.pc >> 4) & 4095u]++; }
         else psx_cpu_run(&cpu, n);
         done += n;
+        {   /* 值猎手(task-143 下楔): 首见 0x94639271/9463941B 落 RAM 的帧+现场 */
+            static int hunted = 0;
+            if (!hunted) {
+                uint32_t *mw = (uint32_t *)core.ram;
+                for (uint32_t z = 0; z < 0x200000u / 4u; z++) {
+                    if (mw[z] == 0x94639271u || mw[z] == 0x9463941Bu) {
+                        fprintf(stderr, "HUNT frame=%u done=%u [%08x]=%08x pc=%08x exc=%u\n",
+                                dev.vframes, done, 0x80000000u + z * 4u, mw[z], cpu.pc, cpu.exc_n);
+                        fflush(stderr);
+                        hunted = 1; break;
+                    }
+                }
+            }
+        }
         if (!getenv("RETAIL_STEP")) psx_gpu_tick(&gpu);
         psx_dev_vframe(&dev);
         if (getenv("RETAIL_STEP")) {            /* 帧级进度诊 */
@@ -913,6 +931,16 @@ int cmd_retail_probe(int argc, char **argv)
         }
         printf("\n");
     }
+        {
+            uint32_t slots[3] = { 0x800763E8u, 0x8007FA90u, 0x80010000u };
+            uint32_t wwz2;
+            printf("RETAIL_EXC slots:");
+            for (int qs = 0; qs < 3; qs++) {
+                void *qp = psx_translate(&core, slots[qs], &wwz2);
+                printf(" [%08x]=%08x", slots[qs], qp ? *(uint32_t*)qp : 0xDEDu);
+            }
+            printf("\n");
+        }
     psx_dev_trace_dump(14);
     if (hot) {
         for (int pass = 0; pass < 10; pass++) {

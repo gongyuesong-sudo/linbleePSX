@@ -107,7 +107,13 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
                                 /* GPUSTAT 正字(no$psx 1F801814 读): bit24 ready-cmd, bit26 ready-VRAM,
                                  * bit28 ready-DMA-block, bit12 DMA active=0 面; 同步光栅器恒就绪 */
     case 0x181C: return 0u;   /* GPU ACK: 无错 */
-    default: return 0;
+    case 0x1DA8: return 0u;                        /* SPU FIFO 读=0 */
+    case 0x1DAA: return 0x400u | (d->spu_stat & ~0x400u); /* bit10=传输缓冲空(恒就绪) */
+    case 0x1DAC: return 0u;                        /* IRQ 状态: 无待中断 */
+    case 0x1DAE: return d->spu_xfer | 0x400u;      /* 传输完成位恒置 */
+    default:
+        if (off < 0x400u) return d->sh[off / 4];
+        return 0;
     }
 }
 
@@ -151,7 +157,15 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
                             d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
         if (d->gpu) gpu_gp0_fwd(d->gpu, val);            /* 楔5: 消费者转发 */
         break;    case 0x1814: case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;  /* GP1 正字 1F801814 */
-    default: break;
+    /* SPU 传输面 (task-143 真盘静态反汇编钉字: 解包器半字拷流写 0x1DA8 FIFO,
+     * 轮询 0x1DAA/0x1DAE 状态; no$psx SPU 窗 0x1F801C00-0x1F801DFF):
+     * 传输完成位(bit10)恒就绪 = 同步吸收语义; 0x1DAA 回读=最后写值(握手面)。 */
+    case 0x1DA8: d->spu_fifo = val & 0xFFFFu; break;           /* 声样半字入 FIFO: 吸收 */
+    case 0x1DAA: d->spu_stat = val & 0xFFFFu; break;           /* 控制字存值可回读 */
+    case 0x1DAE: d->spu_xfer = val; break;                     /* 传输基址/计数存值 */
+    default:
+        if (off < 0x400u) { d->sh[off / 4] = val; break; }
+        break;
     }
 }
 

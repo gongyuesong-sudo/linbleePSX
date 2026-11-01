@@ -42,6 +42,9 @@ typedef struct psx_dev_s {
     uint32_t timer_target[4];   /* 0x1108/1118/1128/1138 */
     /* C2 私有握手窗 (docs/62) */
     uint32_t reg1044;
+    uint32_t spu_fifo, spu_stat, spu_xfer;  /* SPU 传输面 v1 (task-143) */
+    uint32_t sh[0x100];   /* 0x000-0x3FF / 0x1000-0x10FF 影子存值回读面: 未建模寄存器
+                           * 读写可回读(v1 诚实面; task-143 DMA 全局口 0x10F0 实证) */
     uint32_t phase104a;         /* 双相位: 0→bit0, 1→bit1, 循环 */
     void    *gpu;               /* 清洁房楔5: psx_gpu_t* (GP0/GP1 口转发, NULL=观测面) */
     /* GPU (docs/39 端口族): GP0 FIFO 深 4 */

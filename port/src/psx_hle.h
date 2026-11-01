@@ -36,6 +36,7 @@ typedef struct psx_hle {
     uint32_t last_vec, last_cmd;
     int      last_unknown; /* 最近未实现号 (vec<<8|cmd), 无=-1 */
     void      *dev;               /* psx_dev_t* (GPU_cw A(0x49) GP0 转发; 可 NULL) */
+    struct { uint32_t vec, cmd, v0, a0, a1, pc; } hist[64]; unsigned hist_n;
     uint32_t   b35_buf;           /* B(0x35) 假设面留驻缓冲 GPA */
     uint32_t   entry_hook;          /* B(0x19) HookEntryInt 挂钩点 (v1=存值, 异常链不伪造) */
     /* retail probe 观测面: 未登记号直方图 (key = vec<<8|cmd) */
