@@ -1562,10 +1562,11 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
             uint32_t half_pc = 0, qtr_pc = 0;
             uint32_t rpv[6] = {0};
             for (uint32_t st = 0; st < rp_budget; st++) {
-                psx_cpu_step(c);
+                                psx_cpu_step(c);
                 if (st == rp_budget / 4) { qtr_pc = c->pc;
                     rpv[0]=c->gpr[2]; rpv[1]=c->gpr[3]; rpv[2]=c->gpr[4];
-                    rpv[3]=c->gpr[16]; rpv[4]=c->gpr[17]; rpv[5]=c->gpr[22]; }
+                    rpv[3]=hle_rd32(h, 0x800D6AF4u); rpv[4]=hle_rd32(h, 0x800D6AF8u);
+                    rpv[5]=h->dev ? ((psx_dev_t *)h->dev)->timer_cnt[3] : 0u; }
                 if (st == rp_budget / 2) half_pc = c->pc;
                 /* 楔25: done 判据放宽=pc 落回 trampoline(其首条=jr $ra)即算返回,
                  * 旧双等判据因延迟槽差一拍永不命中(done=0 假象, 楔24 复勘) */
@@ -1579,7 +1580,7 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
             if (getenv("RETAIL_RPTRACE")) {
                 fprintf(stderr, "RPFIRE node=%08x func=%08x done=%d pc=%08x npc=%08x ra=%08x qtr=%08x half=%08x\n",
                         head, func, done, c->pc, c->npc, c->gpr[31], qtr_pc, half_pc);
-                fprintf(stderr, "RPREG v0=%08x v1=%08x a0=%08x a1=%08x s2=%08x s3=%08x | qtr v0=%08x v1=%08x a0=%08x s0=%08x s1=%08x t6=%08x\n",
+                fprintf(stderr, "RPREG v0=%08x v1=%08x a0=%08x a1=%08x s2=%08x s3=%08x | qtr v0=%08x v1=%08x a0=%08x busy=%08x thr=%08x t3=%08x\n",
                         c->gpr[2], c->gpr[3], c->gpr[4], c->gpr[5], c->gpr[18], c->gpr[19],
                         rpv[0], rpv[1], rpv[2], rpv[3], rpv[4], rpv[5]);
             }

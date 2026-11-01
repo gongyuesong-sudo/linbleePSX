@@ -102,11 +102,15 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
 static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
 {
     (void)size;
+    /* 楔28 翻案归档: 曾按 psx-spx 布局(0xC 步幅, T3=1124)重映射定时器地址,
+     * 实测游戏行为零变化 → 本代 LIBSN 游戏按 Eriksen/no$psx 旧文档布局用
+     * 0x10 步幅(T1 cnt@1110, T2 cnt@1120, ctrl@1124, target@1128)。已撤回,
+     * 保持 task-135 旧步幅。教训: "真机正字"两说并存时, 以游戏活体读址为准。 */
     if (off / 4 < MH) g_rd[off / 4]++;
     switch (off) {
-    case 0x1070: { /* I_STAT: 返回现值; EVTGEN=每 64 次读翻转置位 vblank 位 0x8 */
+    case 0x1070: { /* I_STAT: 返回现值; EVTGEN=每 64 次读置位 vblank 位 bit0(PSX 正字) */
         uint32_t v = d->i_stat;
-        if (++d->istat_reads % 64u == 0u) d->i_stat |= 0x1u;   /* 楔8b-2 实验: BIOS 轮询位=PSX 正字 bit0 VBlank(0x8 为 BLEEM 宿主私有面, 对 BIOS 无效) */
+        if (++d->istat_reads % 64u == 0u) d->i_stat |= 0x1u;
         return v;
     }
     case 0x1074: return d->i_mask;
@@ -126,6 +130,14 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
         uint32_t rdy = d->cd_resp_n > 0 ? 0x80u : 0u;
         return rdy | 0x18u; }
     case 0x1825: return 0;                        /* CDSEL/CONFIG 回读 */
+    case 0x1100: case 0x1110: case 0x1120: { /* Timer cnt (旧 0x10 步幅, 楔28 翻案恢复) */
+        psx_dev_sync(d);
+        return d->timer_cnt[(off - 0x1100) / 0x10];
+    }
+    case 0x1104: case 0x1114: case 0x1124:
+        return d->timer_ctrl[(off - 0x1104) / 0x10];
+    case 0x1108: case 0x1118: case 0x1128:
+        return d->timer_target[(off - 0x1108) / 0x10];
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
         /* 楔23: 真机 pad 应答序列 0x5A 0x5D(digital 在位)。游戏引擎以非 5A 头判超时
          * (0xFFFF 无垫面被 800666f4 等待环拒 → 走 80052024 失败清理 sh zero [50C2])。 */
@@ -142,7 +154,7 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
                 d->sio_rxq_rp += pop; d->sio_rxf -= pop;
                 v = b0 | (b1 << 8);
             }
-            if (d->sio1044) d->sio1044 = 1u | (d->sio_rxf << 3);
+            if (d->sio1044) d->sio1044 = (d->sio1044 & (1u|3u<<9)) | (d->sio_rxf << 3);  /* 保 bit0/bit9 */
             return v;
         }
         break;                            /* (落到 shadow 默认) */
@@ -157,19 +169,6 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
         d->phase104a++;
         return (1u << ph) | (d->reg1044 & 0x100u ? 0x100u : 0u);
     }
-    case 0x1100: case 0x1110: case 0x1120: { /* Timer cnt (task-135 全语义 M2):
-        * task-158 楔19: 0x1130 剔除 = RAM_SIZE 正字(PSX 仅 T0-T2)
-        enable 才走; target 模式(bit7=0)达 target 归零+IRQ; wrap 模式(bit7=1)0xFFFF 回绕+IRQ;
-        IRQ 置位受 ctrl bit6 门 (psx-spx 公开位义) */
-        psx_dev_sync(d);                                       /* 时钟驱动(task-152):
-        * 旧"逐读推进"使连续双读永不相等 → tick 稳定读循环引擎死转。
-        * 真机=计数随 CPU 时钟走, 背靠背读同值。 */
-        return d->timer_cnt[(off - 0x1100) / 0x10];
-    }
-    case 0x1104: case 0x1114: case 0x1124:
-        return d->timer_ctrl[(off - 0x1104) / 0x10];
-    case 0x1108: case 0x1118: case 0x1128:
-        return d->timer_target[(off - 0x1108) / 0x10];
     case 0x1801: case 0x1802: case 0x1803:   /* LIBSN 设备握手轮询面: 同步 GPU 即时消费 → 0 */
     case 0x1800: case 0x1810: case 0x1808:
         return 0u;   /* GPUREAD 正字(no$psx 1F801800/1810/1808 读=GPU 读响应 FIFO):
@@ -244,7 +243,7 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
          * 本门控直接投递"无垫"完成态: RX=2 字节(0xFFFF 应答) 供游戏读取收敛 init。 */
         /* 楔23 活体钉字(8006587c): 游戏 SIO 引擎等 1044 bit0(TX 就绪)再发送。
          * 真机 bit0=ready; RX 计数 bits3-6 亦就绪=无垫应答在位。 */
-        d->sio1044 = (val & 0xFFu) ? 1u : 0u; d->sio_rxf = 0u;  /* 楔24: baud=仅 ready, 应答等 TX 触发 */
+        d->sio1044 = (val & 0xFFu) ? (1u | (1u << 9)) : 0u; d->sio_rxf = 0u;  /* 楔24: baud=仅 ready, 应答等 TX 触发 */
         break;
     case 0x104A: d->reg104a_shadow = val; break;        /* 楔22: 104A 控制字 RMW 保留 */
     case 0x1040: case 0x1041: case 0x1042: case 0x1043:
@@ -257,7 +256,7 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
             static const uint8_t reply[8] = {0x5A,0x5D,0x5C,0x5D,0xFF,0xFF,0xFF,0xFF};
             for (int qi = 0; qi < 8; qi++) d->sio_rxq[(d->sio_rxq_rp + d->sio_rxf + qi) & 15u] = reply[qi];
             d->sio_rxf += 8u; if (d->sio_rxf > 15u) d->sio_rxf = 15u;
-            d->sio1044 = 1u | (d->sio_rxf << 3);
+            d->sio1044 = 1u | (1u << 9) | (d->sio_rxf << 3);  /* 楔28: bit9=TX 完成门(80065568 andi 0x200) */
             /* 楔27 翻案入账: [80076194] "TTY 缓冲"预置实验无效(结构未钉=臆测, 已撤)。
              * 线程 A 等的是 PCB(800D6880)+0x3C RX 端口直读路, RX FIFO 面已对。 */
         }
@@ -283,7 +282,7 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
         { int t4 = (off - 0x1100) / 0x10;
           d->timer_cnt[t4] = val & 0xFFFFu;
           d->timer_last_sync[t4] = psx_sysclk_provider ? psx_sysclk_provider() : 0u; } break;
-case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 正字 1F801810;
+    case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 正字 1F801810;
         * 0x1800/0x1808=旧自造兼容) 深 4 满丢弃 */
         if (size >= 4) {                                /* 字推送 = 入队+转发 */
             if (d->gp0_n < 4) d->gp0_fifo[d->gp0_n++] = val;

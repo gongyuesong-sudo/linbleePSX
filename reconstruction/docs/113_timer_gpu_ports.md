@@ -464,3 +464,21 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 楔28 战役: 线程 A fire 内**逐字节**钉 RX 消费序列(SIOTR+fire 窗口联合), 判 8 字节
   应答哪一槽位不被接受; 或对照 psx-spx pad 时序(0x01 0x42 → 5A 5F/5A 5D 模式字)。
 - 回归: 八面 118P/0F; 北斗 100M served=172 exc=1; 三国志2 exc=0。
+
+## 楔28 (SESSION-167): 1044 bit9 TX 门 + 66D4 快照器全解 + 步幅"正字"翻案撤回
+- **1044 bit9 = TX 完成门**(活体钉字 80065568 `lhu 4(v1); andi 0x200` beqz 分支): 投上后
+  线程 A 从 65878 深进到 **800655A8**(大跨越)。1044 现模型 = bit0|bit9|(rxf<<3)。
+- **800666D4 = 延时测量器装填**全解: `[6AF4]=lhu(1F801120) 快照; [6AF8]=a0 阈值`。
+  配 66F4: 出口=(当前读值-快照)>=阈值 = 真机"等 T3/Counter 推进 thr 个 1/8MHz tick"。
+- 新驻点(楔29): 800655A0 等待环 `jal 66f4; beqz→自旋`, qtr 采样 busy=0xFFFF thr=0x91
+  t3(cnt@1120 旧步幅)=0 → (a0-0xFFFF) 有符号永假。缺口=游戏写的 1120 读回必须是
+  **随时间递增计数器**(复位后 T2 cnt 或 free-running Counter), 本模型 1120 复位=0 且
+  无 enable 不走。候选修复: 1120 读恒回 free-running(sysclk/8 折叠 16 位)不看 enable。
+- **翻案撤回**: 曾按 psx-spx 布局(T3=1124-112B, 0xC 步幅)重映射全部 timer 地址,
+  实测游戏行为零变化(仍驻同点)→ 本代 LIBSN 按 Eriksen/no$psx 旧文档 0x10 步幅
+  使用(T1 cnt@1110 读 tick, T2/Counter cnt@1120, ctrl@1124, target@1128)。已全撤。
+  教训: 两说并存时以游戏活体读址为准, 勿以文档"正字"重排地基。
+- **stale binary 实锤再犯**: 撤回轮"全绿"是编译失败后的旧二进制; grep error 复原
+  真编译后暴露 3 条误删(I_STAT EVTGEN case/g_rd 计数行), 补回后真全绿 118P/0F。
+- 回归(真新二进制): 八面 118P/0F; 北斗 100M served=172 exc=1; 三国志2 exc=0;
+  打击者 exc=1; 窗口 frames=125 hw=1。
