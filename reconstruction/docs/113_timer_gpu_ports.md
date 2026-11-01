@@ -956,3 +956,12 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   出门查 `[[7FA9C]]&0x100` / `[[7FA90]]&0x400` 两 flag(现全 0)。
 - 楔58: 反汇编 `4594C`(slt 动作支)/`458B4`(flag 命中支), 找 overlay 装载触发
   条件(疑事件 `[7FAC8]` 簇或堆就绪位); 本楔纯取证 port 树零改动(楔55 态)。
+
+## 战役目标库扩充 (SESSION-193 尾): FF8 USA 四盘入列 + Disc1 基线
+- `/home/gill/bleem/psgame/Final Fantasy VIII (USA)/` = Disc1-4 `.bin`(2352 raw)+`.cue`
+  (MODE2/2352 单轨)。运行期只读诊断目标, 永不入库(版权纪律同前)。
+- Disc 1 首探基线(20M, 零 BIOS 默认门): 冷启 `entry=80011534`(一级引导直入),
+  `served=20 unknown=0 exc=0`, pc=80042664, 主循环热桶 02640-02690+04840/048f0
+  各 ~18132 发=**游戏主环在转**; gpu vframes=36 gp0=4 gp1=3。
+  rootcall 画像: A0:3f/44/49/72/9f, B0:08/0c/19/3f/56/5b, C0:0a——全在册, 零 UNK。
+- 定位: FF8 = 新战役目标(与北斗正交); 楔58(北斗调度环)不变主线。
