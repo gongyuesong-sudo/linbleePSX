@@ -1292,8 +1292,8 @@ int cmd_retail_probe(int argc, char **argv)
                 psx_cpu_step(&cpu);
                 if (((cpu.pc >> 4) & 0xFFFFFu) == wpc_target) {
                     if (wpc_hits < 8u)
-                        printf("WPCHIT #%u pc=%08x npc=%08x v0=%08x ra=%08x\n",
-                               wpc_hits, cpu.pc, cpu.npc, cpu.gpr[2], cpu.gpr[31]);
+                        printf("WPCHIT #%u pc=%08x npc=%08x v0=%08x v1=%08x a0=%08x ra=%08x\n",
+                               wpc_hits, cpu.pc, cpu.npc, cpu.gpr[2], cpu.gpr[3], cpu.gpr[4], cpu.gpr[31]);
                     wpc_hits++;
                 }
             }
