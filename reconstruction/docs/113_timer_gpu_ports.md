@@ -564,3 +564,19 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 楔34: 单开 ISR 注入深挖渲染驻点(50A8C beqz s0→af8 路 = 503B4 返回状态字 s0 位义);
   注入转正候选=与 [50C2] 语义等价的 EntryInt 序列模拟(需防 hook 字污染)。
 - 回归: dev16/eng9/cpu16/hle20 全 0F; 默认门北斗 172/exc=1; 三国志2 exc=0。
+
+## 楔34 (SESSION-173): 渲染真空根因 = **设备 Dopen 被抢置跳掉**
+- ISR 注入单变量下 WPC 点位图: 503B4 入口 794K → 全走 `beqz→50900` idle 出口
+  (1.06M hits, nibble=0 恒无包) ; 50408 nibble 变化路=0; 主泵 50A80 jal=0; 渲染提交=0。
+- CALLTR 画像: `InitDevices(0x41a)` = 请求 7 设备, SysEnqIntRP 仅注册链 #2 一条。
+  vtable 8 槽 WPC: +4/+8/+C/+10/+14 全跑过, **+0x18=80052238 恒 0 调用**。
+- **80052238 = 设备 Dopen 正字**(活体反汇编): `[50C0]==0` 才走首次 open(B0 装填
+  80052314 + `sh 1 [50C0]` open flag + `sh [5032]→[6150]` + `4F464→[6154]`);
+  已开返 -1。**[50C0] 被游戏 entry 路(sh 1 @80051E40)抢置 1 → Dopen 永返 -1 →
+  CB 注册([76CE4]) 与 DMA 分配(43A8 路)整链被跳** = 无绘制工作/CD 零命令的共同上游。
+- 静态无 `jal 52238`(文件图像) = 触发方=动态区 driver open API(二段码)。
+- 实验撤回记录: VBlank 追加派发口(fire_extra_fn=52238)时序不利(CB+RFE 组合有
+  hook 字污染崩史 cause28 pc=10), 未验证即撤, 树保净。
+- 楔35 候选: 主泵路径内(RFE hook 派发面)而非 VBlank 尾注入 Dopen; 或按真机序在
+  coldboot 后、entry sh 1 之前让游戏自走 Dopen(找 entry 路 sh 1 的条件分支缺口)。
+- 回归: 默认门 dev16/eng9/cpu16/hle20 全 0F(净树=楔33 态)。
