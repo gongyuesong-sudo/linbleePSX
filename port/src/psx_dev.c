@@ -453,6 +453,13 @@ void psx_dev_vframe(psx_dev_t *d)
     }
 }
 
+void psx_dev_raise_vblank_irq(psx_dev_t *d)
+{
+    /* 楔50: 真机=硬件 IRQ 在跳 EntryInt 前已置 I_STAT bit0; 本核 vblank fire
+     * 与 pump 派发间游戏自读/清会吞位 → 派发时刻再置一次(单次语义等价)。 */
+    if (d) d->i_stat |= 1u;
+}
+
 void psx_dev_gpu_attach(void *dev, void *gpu) { ((psx_dev_t *)dev)->gpu = gpu; }
 void psx_dev_core_attach(void *dev, void *core) { ((psx_dev_t *)dev)->core = core; }
 

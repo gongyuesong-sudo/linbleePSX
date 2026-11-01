@@ -822,3 +822,18 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 三国志2/NBA/Striker 30M **逐字回到楔41 基线**(served 11/27/8, pc 同址)。
 - 八面 8/8。楔50 单点不变: per-frame VBlankIntCB 到达面([50F0]&I_MASK&I_STAT
   短路) + 队列泵 60C10 槽位驱动。
+
+## 楔50 (SESSION-188): EntryInt 面 IRQ 锁存正字 + 防挂死弹帧
+- VBlankIntCB 主门 `51F04 (I_MASK&I_STAT&[50F0])` 零过根因=**派发时刻 I_STAT bit0
+  已被游戏自读路吞清**; 真机语义=硬件 IRQ 在跳 EntryInt 前已锁存 I_STAT。
+  转正=两路派发(rootcall 尾 + vframe 外驱)统一 `psx_dev_raise_vblank_irq()`。
+  (初版只 external 置位 → rootcall 路 20/35 空转短路, IRQDBG 计数实钉。)
+- 防挂死: 外驱派发后游戏陷纯轮询环不归还影子帧 → `pump_stuck` 跨 2 帧宿主等价
+  弹帧; **stuck 计数不得在派发口复位**(两路交替清零, 第一版实错已改)。
+- 40M 实测: served 247→296, **gp0 13→22, gp1 2→10**(GPU 命令双口起量), exc=0。
+- WPC 面注意: **采样路(hot/wpc on)不跑帧尾外驱泵**(在 else 支)——WPC 数字对
+  外驱机制天然偏低, 判外驱效应必须用默认跑基线对照。
+- 残留(楔51): 队列泵 60C10/issuer 60A38 仍零调——CB 链 bit0 已过但 [76168]
+  注册晚于 dispatcher 活跃窗; 候选=派发口顺带 jalr [76168..84] 非空槽(等价
+  分发器常驻) 或钉 dispatcher 为何只 7 hits。
+- 回归: 八面 8/8; 三国志2/NBA/Striker 20M exc=0 served 持平, pc 健康前移。

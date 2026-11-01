@@ -640,10 +640,29 @@ void psx_hle_waterline_pump(psx_hle_t *h)
                   disp >= 0x80000000u && disp < 0x88000000u);
         if (!ok) return;
     }
-    if (!h->dev || !cc || cc->ctx_saved || !cc->entry_hook) return;
+    if (!h->dev || !cc || !cc->entry_hook) return;
+    if (cc->ctx_saved) {
+        /* 楔50 防挂死: 外驱派发的 CB 轮若游戏陷纯轮询环不归还帧(rfe 不到),
+         * 跨 2 帧由宿主等价弹帧(BIOS 派发面返回语义), 否则泵永久停摆
+         * (实钉: 12 轮后 ctx_saved 永挂, vframes 照涨 pump 零派发)。 */
+        if (!h->external) return;
+        if (++h->pump_stuck < 2) return;
+        h->pump_stuck = 0;
+        cc->ctx_saved = 0;
+        cc->cop0[12] = cc->saved_status;
+        cc->cop0[14] = cc->saved_epc; cc->cop0[13] = cc->saved_cause;
+        for (int r = 0; r < 32; r++) cc->gpr[r] = cc->saved_gpr[r];
+        cc->pc = cc->saved_npc - 4u; cc->npc = cc->saved_npc;
+        cc->branch_pending = 0;
+        return;
+    }
     uint32_t vf = psx_dev_vframes_get((psx_dev_t *)h->dev);
     if (vf == h->last_pump_vf) return;
     h->last_pump_vf = vf;
+    /* 楔50: pump_stuck 不在此复位(两路交替会清零); 仅成功弹帧后清 */
+    /* 楔50: 两路派发都置 I_STAT bit0(真机 EntryInt 进入时 IRQ 已锁存;
+     * 只 external 置位则 rootcall 路 20/35 空转 beqz 短路, IRQDBG 实钉) */
+    psx_dev_raise_vblank_irq((psx_dev_t *)h->dev);
     uint32_t hw; void *ph = psx_translate(h->core, cc->entry_hook & ~3u, &hw);
     uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
     uint32_t target = raw & ~1u;

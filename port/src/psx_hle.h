@@ -42,6 +42,7 @@ typedef struct psx_hle {
     uint32_t   last_pump_vf;                  /* rootcall 时机派发水位 (task-153) */
     uint32_t   b17_hits;                      /* 楔49b: B0:17 使用计数(外驱泵资格门) */
     int        external;                      /* 楔49b: 1=vframe 外驱路(需证据门) */
+    int        pump_stuck;                    /* 楔50: 外驱 ctx_saved 跨帧计数(防挂死) */
     uint32_t   setjmp_buf;        /* 最近 b_setjmp buf */
     uint32_t   b35_buf;           /* B(0x35) 假设面留驻缓冲 GPA */
     uint32_t   entry_hook;          /* B(0x19) HookEntryInt 挂钩点 (v1=存值, 异常链不伪造) */
