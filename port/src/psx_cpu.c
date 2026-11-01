@@ -112,14 +112,20 @@ static int st_val(psx_cpu_t *c, uint32_t gpa, int sz, uint32_t val)
 
 /* 楔5: 中断自动进入链。step 头检查(报告点=下条未执行指令, eret 后重执行它);
  * 条件: status.IE(bit0) && !EXL(bit1) && (I_STAT & I_MASK & 13 源位) */
-unsigned g_irqdbg = 0;
+unsigned g_irqdbg = 0; unsigned irq_probe_n;
 static int irq_check(psx_cpu_t *c)
 {
     psx_dev_t *d = (psx_dev_t *)c->core->dev;
     if (!d) return 0;
     uint32_t st = c->cop0[12];
-    if (!(st & 1u) || (st & 2u)) return 0;
+    /* 楔22 实验(RETAIL_RFEALWAYS): LIBSN 内核=IE 轮询模型(主线程恒 IE=0, IRQT 实证),
+     * 真机 BIOS 中断泵亦不看游戏 IE —— hook 在场时以 stat&mask 水位直接派发。 */
+    static int alw = -1;
+    if (alw < 0) alw = getenv("RETAIL_RFEALWAYS") ? 1 : 0;
+    if ((st & 2u)) { if (alw && (irq_probe_n++ % 4000000u)==0u) fprintf(stderr,"IRQPROBE exl st=%08x pc=%08x\n",st,c->pc); return 0; }
+    if (!(st & 1u) && !(alw && c->entry_hook)) return 0;
     if (!(d->i_stat & d->i_mask & 0x3FFFu)) return 0;   /* 0-9 KSEG 源 + 10-13 T0-T3 (task-135: 0x1FFF 漏 T3 位) */
+    if (alw && (irq_probe_n++ % 4000000u)==0u) fprintf(stderr,"IRQPROBE pass st=%08x stat=%04x hook=%08x ctx=%u\n",st,d->i_stat,c->entry_hook,c->ctx_saved);
     if (g_irqdbg) { static unsigned q=0; if (q++<4u) printf("IRQCHK st=%08x stat=%04x mask=%04x\n", c->cop0[12], d->i_stat, d->i_mask); }
     uint32_t active = d->i_stat & d->i_mask & 0x3FFFu;
 
@@ -150,10 +156,13 @@ static int irq_check(psx_cpu_t *c)
             c->cop0[14] = c->npc; c->cop0[13] = (1u << 8);
             c->cop0[12] = (c->cop0[12] & ~3u) | 2u;      /* IE=0(派发中原子) EXL=1 */
             c->branch_pending = 0;
-            c->gpr[2] = 1u;                               /* v0=1: resume 分支正字 */
+            /* 楔22 实验(RETAIL_RFEV0): 真机新中断=首进分支(v0=0), 非 resume(v0=1)。
+             * E10 活体钉字(楔153): v0==0 走首进 / v0!=0 走恢复泵。默认仍 1 保基线。 */
+            { static int rv0 = -1; if (rv0 < 0) { const char *e = getenv("RETAIL_RFEV0"); rv0 = e ? atoi(e) : 1; }
+              c->gpr[2] = (uint32_t)rv0; }
             c->gpr[31] = 0x800001A8u;                     /* rfe 蹦床兜底 */
             c->pc = target - 4u; c->npc = target; c->exc_n++;
-            if (g_irqdbg) printf("IRQDBG->RFE %08x (raw=%08x v0=1 帧已存)\n", target, raw);
+            if (g_irqdbg) printf("IRQDBG->RFE %08x (raw=%08x v0=%u 帧已存)\n", target, raw, c->gpr[2]);
             return 1;
         }
         if (raw && target >= 0x80000000u && target < 0x88000000u && c->ctx_saved) {

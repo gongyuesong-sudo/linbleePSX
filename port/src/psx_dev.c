@@ -82,7 +82,21 @@ void psx_dev_init(psx_dev_t *d)
 }
 
 
+/* 楔22: SIO 口(RW 0x1040-0x104F)数据级 trace — 游戏 pad/记忆卡 init 失败
+ * 根因链钉字([800750C2]=0 → 驱动拒渲染), cached env 零开销 */
+static int sio_tr = -1;
+static uint32_t sio_log_n = 0;
+static void sio_trace(const char *rw, uint32_t off, uint32_t val, int size)
+{
+    if (sio_tr < 0) sio_tr = getenv("RETAIL_SIOTR") ? 1 : 0;
+    if (!sio_tr || off < 0x1040 || off > 0x104F || sio_log_n++ >= 400u) return;
+    fprintf(stderr, "SIOTR %s off=%04x size=%d val=%08x\n", rw, off, size, val);
+}
+static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size);
+static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size);
 uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
+{ uint32_t v = psx_dev_read_i(d, off, size); sio_trace("R", off, v, size); return v; }
+static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
 {
     (void)size;
     if (off / 4 < MH) g_rd[off / 4]++;
@@ -109,7 +123,14 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
         uint32_t rdy = d->cd_resp_n > 0 ? 0x80u : 0u;
         return rdy | 0x18u; }
     case 0x1825: return 0;                        /* CDSEL/CONFIG 回读 */
-    case 0x1044: return d->reg1044;
+    case 0x1040: case 0x1041: case 0x1042: case 0x1043:
+        if (d->sio_rxf) return 0xFFFFu;   /* 楔22 门控: RX 数据=无垫应答 0xFF 对 */
+        break;                            /* (落到 shadow 默认) */
+    case 0x1044:
+        /* 楔22 实验(门控): LIBSN SIO 引擎(0x8003F670) TX 泵等 1044 非零。
+         * RETAIL_SIO1044=1 → 回 TX 计数影子(暂以 104A bit0 语义镜像=1)。 */
+        if (d->sio1044) return d->sio1044;
+        return d->reg1044;
     case 0x1048: case 0x104C: return 0;
     case 0x104A: { /* 双相位握手: bit0→bit1 逐读推进 (docs/62 状态机化) */
         uint32_t ph = d->phase104a & 1u;
@@ -157,6 +178,8 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
 }
 
 void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
+{ sio_trace("W", off, val, size); psx_dev_write_i(d, off, val, size); }
+static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
 {
     if (off / 4 < MH) g_wr[off / 4]++;
     switch (off) {
@@ -185,6 +208,16 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1010: case 0x1014: case 0x1018: case 0x101c:
     case 0x1020: case 0x1024: case 0x1028: case 0x102c: break; /* 控制区存写弃(观测面) */
     case 0x1044: d->reg1044 = val; break;              /* docs/62 RMW 窗(简化直存) */
+    case 0x1048:                                        /* 楔22 门控: baud 写=TX 启动面 */
+        /* psx-spx 1044 位义: bits3-6=RX 字节计数。真机 BIOS 于 VBlank 自动 pad 轮询;
+         * 本门控直接投递"无垫"完成态: RX=2 字节(0xFFFF 应答) 供游戏读取收敛 init。 */
+        d->sio1044 = (val & 0xFFu) ? (2u << 3) : 0u; d->sio_rxf = (val & 0xFFu) ? 2u : 0u; break;
+    case 0x104A: d->reg104a_shadow = val; break;        /* 楔22: 104A 控制字 RMW 保留 */
+    case 0x1040: case 0x1041: case 0x1042: case 0x1043:
+        /* 楔22: 游戏清 RX 状态(sh $zero,($v0) 800520b4 活体钉字) = 请求-响应模型 →
+         * 自动投递无垫完成态(RX 2×0xFF + 计数 2 字节) */
+        if (!(val & 0xFFu) && d->sio_rxf) { d->sio1044 = 2u << 3; }
+        break;
     case 0x1104: case 0x1114: case 0x1124:
         { int t3 = (off - 0x1104) / 0x10;
           d->timer_ctrl[t3] = val & 0xFFFFu;

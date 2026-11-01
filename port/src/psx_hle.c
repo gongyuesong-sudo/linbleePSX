@@ -1572,6 +1572,10 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
         }
         head = next;
     }
+    /* 楔22: VBlank 票投递(真机 BIOS vsync 服务 = 给 VSyncCIO class=0 事件置票,
+     * LIBSN 内核 resume 泵出口条件)。全 enabled 事件置 fired=1(内核自消票)。 */
+    for (uint32_t z = 0; z < HLE_EV_MAX; z++)
+        if (h->ev[z].class != 0xFFFFFFFFu && h->ev[z].enabled) h->ev[z].fired = 1;
     /* BIOS VBlank: ChangeClearRCnt 登记地址自动清零 (楔20) */
     for (int z = 0; z < 8; z++)
         if (h->clrcnt[z].addr >= 0x80000000u) hle_wr32(h, h->clrcnt[z].addr, 0u);

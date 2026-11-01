@@ -349,3 +349,23 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 门控矩阵(全默认关): RETAIL_IDLEIE(WaitEvent 开 IE) / RETAIL_RFE(hook RFE 派发, 维持) /
   RETAIL_RP(链火) / RETAIL_RPTRACE(fire 打点)。默认面八面 118P/0F + 四盘基线不动。
 - 三合一最优实验组合(留下楔转正候选): RETAIL_RFE=1 RETAIL_IDLEIE=1 → 主线程进派发链无风暴。
+
+## 楔22 (SESSION-161): 出画根因链终极定性 = LIBSN 设备 init(SIO/CDROM)未完成 → 驱动拒渲染
+- **考古翻案 task-148 "gp0=16.7M"**: worktree 复跑 bcf9c98 实证 16.7M 全在 f0 家族
+  (command 0x00-0x1F=NOP 区)= OTZ 链吃 VRAM 垃圾的假进度; 后续修复只是暴露真态。非回归。
+- 出画阻塞真链(全部活体钉字): LIBSN InitDevices(0x41a 位图) → SIO pad 握手
+  (W 1048=0x0D baud → 等 RX 字节计数 1044 bits3-6 + 1040 RX 数据)→ 我们 RX 恒 0 →
+  init 失败分支 `sh $zero,0x50c2($at)`(8005202c) → 驱动就绪位 [800750C2]=0 →
+  GetFreeCount 门 `jal 80051d68`(=return [800750C2])永假 → 主驱动拒进渲染循环 → gp0=4。
+- 指针表正字: [8007614C]=1F801070(I_STAT) [80076150]=1F801074(I_MASK) [80076154]=1F8010F0
+  = LIBSN 内核直操中断控制器(800520b4 sh zero 清 I_MASK= EnterCritical 模式, 非 SIO)。
+- 新增实验门控(全默认关, 基线不动): RETAIL_RFEV0=<0|1>(RFE 派发 v0; v0=0 首进触发
+  EntryInt 引导 → 跳 NULL 页 nop 海 = 需 BIOS 内部 entry-init 例程, 零 BIOS 盲区钉字);
+  RETAIL_RFEALWAYS(hook 派发不看 IE — LIBSN 恒 IE=0 轮询模型实证 IRQPROBE: EXL=1 内核常驻);
+  RETAIL_SIO1044/baud 影子 + 1040 RX=0xFFFF 无垫应答模型(游戏读 0xFFFF 后 SIO 轮询收敛);
+  RETAIL_SIOTR(SIO 0x1040-0x104F 数据级 trace 400 条)。
+- VBlank 票投递并入 sysrp_fire(全 enabled 事件 fired=1, 真机 BIOS vsync 服务面)。
+- 下一楔(楔23)战役=SIO pad BIOS 引擎完整模型: VBlank 自动轮询序列(0x01 0x42→5A FF 无垫/
+  5A 01 pad 数据)+ RX FIFO + 1044 bits3-6 计数 + 104A ACK 语义; CDROM 命令链(dev 1820 面游戏
+  尚未发到=被 SIO 卡前)后置。完成判据=[800750C2]≠0 → 驱动进渲染 → gp0 真实命令(tri/spr>0)。
+- 回归面: 八面 118P/0F; 北斗神拳 600M 基线(excit=1 pc 8003F53C); 全部门控关。
