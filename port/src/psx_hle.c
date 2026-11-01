@@ -391,6 +391,30 @@ static uint32_t hc_install_exc(psx_hle_t *h, uint32_t cmd)
     } else V0((uint32_t)-1);
     return 0;
 }
+/* C(0x0A) AddCblk [S drivers.s]: 注册 (class,id)→func 设备回调。真机由 BIOS 60Hz
+ * VBlank 事件环逐个调用; 北斗神拳驱动主循环写设备状态 7 后轮询状态等派发清位
+ * (80051328 死环实证, task-149) → psx_hle_vblank_fire 每 VBlank 真调。 */
+static uint32_t hc_add_cblk(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    /* 鲁棒登记(task-149 真盘实证: 参数形态跨 SDK 变体大, 首参即可调用指针形态):
+     * 四个入参中任一像 RAM 函数指针(>=0x80000000 对齐) 都收进环;
+     * 派发预算极小(200 指令)+tramp 振荡即出 = 误伤可控。 */
+    for (int q = 0; q < 4; q++) {
+        uint32_t cand = A_P(q);
+        if (cand >= 0x80000000u && cand < 0x80200000u && (cand & 3u) == 0u) {
+            for (int z = 0; z < 16; z++)
+                if (!h->cb[z].used) {
+                    h->cb[z].used = 1; h->cb[z].class_ = A_P(0); h->cb[z].id = A_P(1);
+                    h->cb[z].func = cand; h->cb[z].gpu = A_P(3); h->cb[z].data = 0u;
+                    V0(0u); return 0;
+                }
+            V0(0u); return 0;   /* 环满: 已注册成功语义(不阻断驱动链) */
+        }
+    }
+    V0(0u); return 0;   /* 无指针形态入参: no-op 成功(诚实登记失败不诈 v0=-1 崩链) */
+}
+
 static uint32_t hc_sysinitmem(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd; /* a0=stack_addr a1=stack_size a2=text_size a3=data_size */
@@ -454,7 +478,7 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->b[0x50] = hb_card_idle;                             /* [S] _new_card */
     /* C [S] */
     h->c[0x02] = hc_enq; h->c[0x03] = hc_deq; h->c[0x07] = hc_install_exc;
-    h->c[0x08] = hc_sysinitmem; h->c[0x0A] = ha_nosync_ok;
+    h->c[0x08] = hc_sysinitmem; h->c[0x0A] = hc_add_cblk;  /* [S] AddCblk 60Hz 回调环 */
     /* C0/B0 表桩区: 清零可被 GetC0Table 消费 */
     for (uint32_t i = 0; i < 0x40u; i += 4u) { hle_wr32(h, HLE_C0_GPA + i, 0); hle_wr32(h, HLE_B0_GPA + i, 0); }
     /* 向量页: 0x80/0xA0/0xB0/0xC0 syscall; +4=jr $ra; +8=nop */
@@ -1105,6 +1129,7 @@ int cmd_retail_probe(int argc, char **argv)
         }
         if (!getenv("RETAIL_STEP")) psx_gpu_tick(&gpu);
         psx_dev_vframe(&dev);
+        if (getenv("RETAIL_CB")) psx_hle_vblank_fire(&h, dev.vframes);   /* task-149 实验门控: 派发语义待真机钉, 默认关 */
         if (getenv("RETAIL_STEP")) {            /* 帧级进度诊 */
             printf("RF done=%u pc=%x exc=%u nlog=%u gp0=%u\n",
                    done, cpu.pc, cpu.exc_n, h.nlog, gpu.gp0_words);
@@ -1190,4 +1215,40 @@ int cmd_retail_probe(int argc, char **argv)
         printf("UNK vec=%02x cmd=%02x n=%u\n", h.unk[z].key >> 8, h.unk[z].key & 0xFF, h.unk[z].cnt);
     psx_disc_close(&d); psx_core_free(&core);
     return 0;
+}
+/* VBlank 60Hz 派发 (task-149): 遍历回调环, 每个同步执行至 trampoline 振荡点。
+ * 现场保护 = 保存主循环 pc/npc/branch, 回调 ABI a0=event a1=class a2=id a3=gpu
+ * 栈[sp+0x10]=data; 返回检测: 回调尾部 jr $ra 落 tramp 后 pc/npc 恒=tramp 振荡。
+ * 预算 30000 指令/回调 + 深度护栏(回调内再触 vblank_fire 直接跳过)。 */
+void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick)
+{
+    if (!h || !h->cpu || g_hle_depth > 2) return;
+    h->vblank_ticks = tick;
+    psx_cpu_t *c = h->cpu;
+    g_hle_depth++;
+    uint32_t tramp = (c->gpr[29] - 32u) & ~3u;   /* 主循环栈底安全窗 */
+    uint32_t ww; 
+    if (!psx_translate(h->core, tramp, &ww)) { g_hle_depth--; return; }
+    uint32_t save_pc = c->pc, save_npc = c->npc;
+    int save_pend = (int)c->branch_pending; uint32_t save_tgt = c->branch_target;
+    uint32_t save_ra = c->gpr[31];
+    hle_wr32(h, tramp, 0x03E00008u);              /* jr $ra */
+    hle_wr32(h, tramp + 4u, 0u);                   /* nop */
+    for (int z = 0; z < 16; z++) {
+        if (!h->cb[z].used || h->cb[z].func < 0x80000000u) continue;
+        c->gpr[4] = tick; c->gpr[5] = h->cb[z].class_; c->gpr[6] = h->cb[z].id;
+        c->gpr[7] = h->cb[z].gpu; c->gpr[31] = tramp;
+        hle_wr32(h, (c->gpr[29] & ~3u) + 0x10u, h->cb[z].data);
+        c->branch_pending = 0;
+        c->pc = tramp; c->npc = h->cb[z].func;     /* 从"tramp 延迟槽"进回调 */
+        for (uint32_t st = 0; st < 200u; st++) {
+            psx_cpu_step(c);
+            if (c->pc == tramp && c->npc == tramp) break;   /* 回调已返回振荡 */
+            if (c->exc_n > 0u && c->pc == save_pc) break;
+        }
+        c->branch_pending = 0;
+    }
+    c->pc = save_pc; c->npc = save_npc; c->gpr[31] = save_ra;
+    c->branch_pending = (uint32_t)save_pend; c->branch_target = save_tgt;
+    g_hle_depth--;
 }

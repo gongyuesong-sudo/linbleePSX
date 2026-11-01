@@ -37,6 +37,8 @@ typedef struct psx_hle {
     int      last_unknown; /* 最近未实现号 (vec<<8|cmd), 无=-1 */
     void      *dev;               /* psx_dev_t* (GPU_cw A(0x49) GP0 转发; 可 NULL) */
     struct { uint32_t vec, cmd, v0, a0, a1, pc; } hist[64]; unsigned hist_n;
+    struct { uint32_t class_, id, func, gpu, data; int used; } cb[16];  /* AddCblk 环 (task-149) */
+    uint32_t   vblank_ticks;                    /* VSync 事件计数 (VSyncCB 参数) */
     uint32_t   setjmp_buf;        /* 最近 b_setjmp buf */
     uint32_t   b35_buf;           /* B(0x35) 假设面留驻缓冲 GPA */
     uint32_t   entry_hook;          /* B(0x19) HookEntryInt 挂钩点 (v1=存值, 异常链不伪造) */
@@ -62,6 +64,7 @@ typedef struct psx_hle {
 int  psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core);
 void psx_hle_uninstall(psx_hle_t *h);
 /* CPU on_rootcall 钩实现: 1=已服务 0=走原异常路径 */
+void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick);  /* 60Hz 设备回调派发 (task-149) */
 int  psx_hle_rootcall(psx_cpu_t *cpu);
 /* 内部堆 API (LoadImage 等复用; EvHeader=公开 PSX 堆头 5 word 布局) */
 uint32_t hle_heap_alloc(psx_hle_t *h, uint32_t size);   /* 返回 EvHeader* (guest) */
