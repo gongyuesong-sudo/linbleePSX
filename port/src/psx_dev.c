@@ -137,6 +137,7 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
          * (busy=0xFFFF 驻点根因)。T2 槽读回 free-running 值。 */
         if (off == 0x1120 && psx_sysclk_provider)
             return (uint32_t)((psx_sysclk_provider() / 8u) & 0xFFFFu);
+
         return d->timer_cnt[(off - 0x1100) / 0x10];
     }
     case 0x1104: case 0x1114: case 0x1124:
@@ -401,6 +402,16 @@ void psx_dev_vframe(psx_dev_t *d)
     if (!d) return;
     d->i_stat |= 0x1u;      /* VBlank (bit0 正字, 楔8b-2 定案) */
     d->vframes++;
+    /* 楔32: BIOS VBlank tick 服务面直投 RAM 槽 [800D2AD0](主循环 80051080 每帧
+     * 读比对, 真机=BIOS 常驻递增; WPC 钉字无供=永 continue)。psx_translate 双门。 */
+    if (d->core) {
+        uint32_t bw = 0;
+        void *q = psx_translate((const psx_core_t *)d->core, 0x800D2AD0u, &bw);
+        if (q && bw == PSX_WIN_RAM) {
+            uint32_t tv = d->vframes;
+            memcpy(q, &tv, 4);
+        }
+    }
 }
 
 void psx_dev_gpu_attach(void *dev, void *gpu) { ((psx_dev_t *)dev)->gpu = gpu; }

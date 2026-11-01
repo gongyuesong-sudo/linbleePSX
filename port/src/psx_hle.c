@@ -1267,12 +1267,29 @@ int cmd_retail_probe(int argc, char **argv)
     uint32_t done = 0;
     static uint32_t hpc[4096];                    /* pc 热点采样 (page 桶, 诊断 RETAIL_HOT) */
     const int hot = getenv("RETAIL_HOT") != NULL;
+    /* 楔32 坑钉: static-once 初读时机错位 + 采样挂 else 链被热循环截流, 双重致 hits
+     * 恒 0。改: 声明即读 env, 采样挂 hot 同款独立 if(不进 else 链)。 */
+    static uint32_t wpc_hits;
+    const char *wpc_env = getenv("RETAIL_WPC");
+    uint32_t wpc_target = wpc_env ? (uint32_t)strtoul(wpc_env, NULL, 16) : 0xDEADBEEFu;
+    const int wpc_on = (wpc_target != 0xDEADBEEFu);
     uint32_t trap_code = 0xFFFFFFFFu;               /* task-158: 目标 excode(1=任意) */
     { const char *tp = getenv("RETAIL_TRAP");
       if (tp) trap_code = (uint32_t)strtoul(tp, NULL, 0); }
     while (done < cycles) {
         uint32_t n = frame_cycles < cycles - done ? frame_cycles : cycles - done;
         if (hot) for (uint32_t z = 0; z < n; z += 64u) { psx_cpu_step(&cpu); hpc[(cpu.pc >> 4) & 4095u]++; }
+        if (wpc_on && !hot && trap_code == 0xFFFFFFFFu)
+            for (uint32_t z = 0; z < n; z++) {
+                psx_cpu_step(&cpu);
+                if (((cpu.pc >> 4) & 0xFFFFFu) == wpc_target) {
+                    if (wpc_hits < 8u)
+                        printf("WPCHIT #%u pc=%08x npc=%08x v0=%08x ra=%08x\n",
+                               wpc_hits, cpu.pc, cpu.npc, cpu.gpr[2], cpu.gpr[31]);
+                    wpc_hits++;
+                }
+            }
+        if (wpc_on && !hot && trap_code == 0xFFFFFFFFu) { /* 已采样步进, 跳过常规跑法 */ }
         else if (trap_code != 0xFFFFFFFFu) {
             /* task-158 楔19: RETAIL_TRAP=<excode hex 或 1>=目标异常前一刻逐帧步停 */
             for (uint32_t z = 0; z < n; z++) {
@@ -1414,6 +1431,7 @@ int cmd_retail_probe(int argc, char **argv)
     { extern unsigned long hle_dbg_calls, hle_dbg_reject, hle_dbg_maxdepth;
       extern unsigned hle_dbg_cw;
       printf("RETAIL_PROBE rc=%lu reject=%lu maxdepth=%lu cw=%u\n", hle_dbg_calls, hle_dbg_reject, hle_dbg_maxdepth, hle_dbg_cw); }
+        if (wpc_target != 0xDEADBEEFu) printf("RETAIL_PROBE wpc_%05x hits=%u\n", wpc_target, wpc_hits);
         printf("RETAIL_PROBE ran=%u served=%u unknown=%u exc=%u cause=%x epc=%x pc=%08x npc=%08x\n",
            done, h.nlog, h.unk_n, cpu.exc_n, cpu.cop0[13], cpu.cop0[14], cpu.pc, cpu.npc);
     {   /* 首异常现场: badv + epc 指令窗 + 关键寄存器 (task-142 死环钉字) */
@@ -1595,6 +1613,14 @@ void psx_hle_sysrp_fire(psx_hle_t *h)
     /* 楔23: LIBSN 内核 entry 泵等 [80075040] 中断源票字(60M RWATCH=无人投,
      * 真机=BIOS VBlank 服务写 0x2421 类掩码) → 本门控投 VBlank 位(bit0)。 */
     if (hle_rd32(h, 0x80075040u) == 0u) hle_wr32(h, 0x80075040u, 1u);
+    /* 楔32: BIOS VBlank tick RAM 槽 [800D2AD0](主循环 80051080 每帧读比对,
+     * 无供=永 continue 实钉 WPC)。真机=BIOS vsync 服务递增。RETAIL_TICKAD=1 门控。 */
+    if (getenv("RETAIL_TICKAD")) {
+        static int tickad_cached = -1;
+        if (tickad_cached < 0) tickad_cached = getenv("RETAIL_TICKAD") ? 1 : 0;
+        if (tickad_cached && h->dev)
+            hle_wr32(h, 0x800D2AD0u, ((psx_dev_t *)h->dev)->vframes + 1u);
+    }
     /* BIOS VBlank: ChangeClearRCnt 登记地址自动清零 (楔20) */
     for (int z = 0; z < 8; z++)
         if (h->clrcnt[z].addr >= 0x80000000u) hle_wr32(h, h->clrcnt[z].addr, 0u);

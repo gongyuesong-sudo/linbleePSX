@@ -531,3 +531,20 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   wedge24 活体见 8005FB10 `jal 80060708`)——找游戏主循环里的调度调用点, 让
   主循环自然走到, 而非宿主强灌。
 - 回归: 默认门北斗 172/exc=1、三国志2 exc=0; dev16/eng9/cpu16 全 0F。
+
+## 楔32 (SESSION-171): WPC 精确 pc 计数面调通 + 主循环自旋环正字
+- 新诊断面 `RETAIL_WPC=<pc>>4 的 5-hex>`(全步采样+前 8 命中现场打印 pc/npc/v0/ra)。
+  三坑连破(全记录防重踩): ①采样块抢挂 else 链头吞掉常规跑法=零推进假 hits 0
+  ②static-once getenv 时机错位 ③**target 键=pc>>4(5 位 hex), 传 6 位全 0**(整楔系列
+  hits=0 皆此因)。hits 现可信。
+- **主循环正字(推翻"pc 恒驻"错觉)**: 51080 自旋环真转(hits=1.7M/30M): 游戏主循环
+  每圈 `jal 800519E4(GetTickWait-1)` → 比 [800D2AD0](BIOS tick 槽) → [800D2AD4] 自增
+  → 60 帧节奏面 → `jal 80051D68`([50C2] 门, hits=850K, 新调用者 ra=80050A60) → idle 回环。
+- SysInit(80060708) **实际执行 2 次**(WPC 06071 hits=2, 旧"零调用"是键错位): 跑完
+  [76CE4] 仍 0 → CD 通道 CB 注册在 StartThread 之后, 线程未起 = 下一环。
+- tick 常开注入: psx_dev_vframe 每 VBlank 写 RAM [800D2AD0]=vframes(psx_translate 双门,
+  真机 BIOS vsync 服务等价); 本盘主环条件 `v0(GetTick 返回) < [2AD0]` 走 510c0 printf 路,
+  注入不改变行为(安全常开, 其他盘可能受益)。
+- 楔33: 找 StartThread 触发面(游戏 main 未跑? 对比 51074 jal 前的初始化序与 [80076D7C]
+  =SysInit 置 1 后的消费方); WPC 用 5 位键。
+- 回归: 八面 118P/0F; 北斗 172/exc=1; 三国志2 exc=0。
