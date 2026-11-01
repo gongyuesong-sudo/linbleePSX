@@ -432,6 +432,7 @@ static uint32_t ha_96_remove(psx_hle_t *h, uint32_t cmd)
 static uint32_t hb_return_from_exc(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd;
+    h->b17_hits++;                            /* 楔49b: 外驱泵资格证据 */
     psx_cpu_t *c = h->cpu;
     if (c && c->ctx_saved && (c->cop0[12] & 2u)) {
         /* RFE 派发中: 从上下文影子整帧恢复主线程 + rfe 正字(IE=旧EXL=0...
@@ -628,6 +629,17 @@ void psx_hle_waterline_pump(psx_hle_t *h)
 {
     psx_cpu_t *cc = h->cpu;
     extern unsigned g_irqdbg;
+    if (h->external) {    /* 楔49b: vframe 外驱路需证据门; rootcall 尾路(task-153)无条件 */
+        uint32_t bw=0, slot=0, disp=0;
+        void *qs = psx_translate(h->core, 0x800750F8u, &bw);
+        if (qs && bw == PSX_WIN_RAM) memcpy(&slot, qs, 4);
+        void *qd = psx_translate(h->core, 0x800750C4u, &bw);
+        if (qd && bw == PSX_WIN_RAM) memcpy(&disp, qd, 4);
+        int ok = h->b17_hits ||
+                 (slot >= 0x80000000u && slot < 0x88000000u &&
+                  disp >= 0x80000000u && disp < 0x88000000u);
+        if (!ok) return;
+    }
     if (!h->dev || !cc || cc->ctx_saved || !cc->entry_hook) return;
     uint32_t vf = psx_dev_vframes_get((psx_dev_t *)h->dev);
     if (vf == h->last_pump_vf) return;
@@ -1316,8 +1328,10 @@ int cmd_retail_probe(int argc, char **argv)
         }
         else {
             psx_cpu_run(&cpu, n);
-            /* 楔49: vframe 边界水位泵(rootcall 时刻绑定解耦, 修分发器饿死) */
+            /* 楔49/49b: vframe 边界外驱泵, 需驱动族装机证据(门在函数内) */
+            h.external = 1;
             psx_hle_waterline_pump(&h);
+            h.external = 0;
         }
         done += n;
         {   /* 每 cause 首现场 (task-146): 新 excode 出现即 dump epc±128B RAM + 指令 */

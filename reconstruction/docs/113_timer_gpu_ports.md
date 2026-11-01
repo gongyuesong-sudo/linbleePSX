@@ -811,3 +811,14 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   `jal 51C44(a1=523FC)` 经 callback 注册面挂表; 楔50=钉"谁在帧中应调
   VBlankIntCB/或直接把泵接成每 vframe 调 523FC 等价体面"(高锚=523DC 注册语义)。
 - 教训: 水位派发绑"陷入时刻"在纯轮询热环下=永不触发; vframe 边界外驱才是正面。
+
+## 楔49b (SESSION-187 续): 外驱泵**证据门转正** — 北斗 200M served=686 gp0=70
+- 楔49 初版无门致三国志2 派进失踪早退(2.1s 零输出实钉); 修正=**双路分离**:
+  rootcall 尾路无条件(task-153 语义) + vframe 外驱路需驱动族装机证据
+  ([50F8]/[50C4] 合法指针, 楔36 同款) 或 b17_hits。门方向初写反(`!external`)
+  当场自查纠正(教训: 门条件写完必须反读一遍语义再编译)。
+- 北斗 200M 终数: **served 181→686, gp0 10→70, exc=0 unknown=0**; pc 稳在
+  `80051E0C`(VBlankIntCB init 区——泵已把主线程推入 init→帧循环大周期)。
+- 三国志2/NBA/Striker 30M **逐字回到楔41 基线**(served 11/27/8, pc 同址)。
+- 八面 8/8。楔50 单点不变: per-frame VBlankIntCB 到达面([50F0]&I_MASK&I_STAT
+  短路) + 队列泵 60C10 槽位驱动。
