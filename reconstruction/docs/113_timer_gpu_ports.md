@@ -83,3 +83,14 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - **现状**: 真盘 60M 周期=1063 帧全跑, unknown=0, exc=2 一次型(待追, a1=1F801110 Timer
   指针相关 store), **GPU 空闲(gp0=5)**=游戏停 in SPU 混音例程不上画 — 下楔=钉游戏主循环
   等什么([s0+0x32] 声部字段/0x1DAA 状态位读回语义) + 一次性 cause=20 现场。
+
+## SESSION-145 追加 (楔 7)
+- **DMA 通道执行引擎 v1**(no$psx 寄存器正字): MADR/BCR/CHCR 组, D2 GPU C→V 块传输送
+  GP0, **触发完成清 CHCR bit28**(影子面旧行为=存 1 不清 → OTAG 等待方永久死等, 本楔修)。
+- **b_setjmp/b_longjmp [S] + printf [S] + B0:0x3F puts 别名 [R]** → 交叉盘三国志2
+  (SLPS_012.20) **UNK 归零**, pc 推进 80180f84→80183228。
+- **真盘执行模型定性**(交叉盘+长跑): **游戏把主循环跑在 VSync 中断 handler 内**(PsyQ
+  callback 模式) —— cause=100(IP8) 恰一次 = IE 修正生效铁证; EXL=1 期间阻断二次中断 =
+  真机同型, 非 bug。北斗神拳 9463 帧 gp0 5→14 缓增 = 长启动解包, 非死锁。
+- **下楔**: ①加速/对齐启动路径(Timer 分频与 SPU 传输语义对 vsync 内循环的节流影响);
+  ②一次性 cause=20 store 现场(北斗神拳); ③第三枚盘(NBA Live 2003 USA)交叉验证。

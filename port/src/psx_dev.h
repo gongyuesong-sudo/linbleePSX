@@ -43,6 +43,8 @@ typedef struct psx_dev_s {
     /* C2 私有握手窗 (docs/62) */
     uint32_t reg1044;
     uint32_t spu_fifo, spu_stat, spu_xfer;  /* SPU 传输面 v1 (task-143) */
+    uint32_t dma_madr[7], dma_bcr[7], dma_chcr[7];  /* DMA 通道寄存器组 (task-145) */
+    void    *core;                                  /* DMA 执行需 RAM 翻译 (attach 挂) */
     uint32_t sh[0x100];   /* 0x000-0x3FF / 0x1000-0x10FF 影子存值回读面: 未建模寄存器
                            * 读写可回读(v1 诚实面; task-143 DMA 全局口 0x10F0 实证) */
     uint32_t phase104a;         /* 双相位: 0→bit0, 1→bit1, 循环 */
@@ -66,6 +68,7 @@ void     psx_dev_trace_dump(int topn);
 /* main.c 子命令入口 (--dev-selftest): 0=PASS */
 int      cmd_dev_selftest(int argc, char **argv);
 /* 清洁房楔5: GPU 附着 (GP0/GP1 口转发) */
+void     psx_dev_core_attach(void *dev, void *core);   /* DMA 执行需 RAM 面 */
 void     psx_dev_gpu_attach(void *dev, void *gpu);
 /* 帧节拍注入 (task-135): 真机 VBlank 源 = I_STAT bit0 置位 (IRQ 链走 irq_check)
  * + 四路 33.87MHz/4 计数器粗步长推进 (v1 仅根节拍, 精确分频后续楔) */

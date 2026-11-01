@@ -177,6 +177,61 @@ static uint32_t hb_hook_entry(psx_hle_t *h, uint32_t cmd)
  * 驱动生命周期入口 = no-op v0=0(InitCARD 返回 0=成功无卡);
  * 传输原语 _card_read/_card_write = 公开文档失败面 v0=-1(游戏据此走无卡分支,
  * 绝不伪造传输成功)。 */
+/* A(0x13) b_setjmp [S sys.s]: 存帧到 buf(a0)。公开布局(v1 自研钉: 本核 longjmp
+ * 消费面与 setjmp 存储面自洽即可, 跨 SDK 精确字段序后续以真机钉):
+ * buf[0]=sp [1]=s0..[9]=s8? — v1: [0]=sp [1]=gp [2]=ra [3..11]=s0-s8。v0=0 直返。
+ * 与后续 b_longjmp(a0=buf, a1=rc) 成对: longjmp 恢复帧 + v0=rc。 */
+static uint32_t ha_bsetjmp(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; psx_cpu_t *c = h->cpu;
+    uint32_t buf = A_P(0);
+    hle_wr32(h, buf + 0u,  c->gpr[29]);
+    hle_wr32(h, buf + 4u,  c->gpr[28]);
+    hle_wr32(h, buf + 8u,  c->gpr[31]);
+    for (int z = 0; z < 9; z++) hle_wr32(h, buf + 12u + (uint32_t)z * 4u, c->gpr[16 + z]);
+    h->setjmp_buf = buf;
+    V0(0u);
+    return 0;
+}
+static uint32_t ha_blongjmp(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; psx_cpu_t *c = h->cpu;
+    uint32_t buf = A_P(0), rc = A_P(1) ? A_P(1) : 1u;
+    c->gpr[29] = hle_rd32(h, buf + 0u);
+    c->gpr[28] = hle_rd32(h, buf + 4u);
+    c->gpr[31] = hle_rd32(h, buf + 8u);
+    for (int z = 0; z < 9; z++) c->gpr[16 + z] = hle_rd32(h, buf + 12u + (uint32_t)z * 4u);
+    V0(rc);
+    /* 返回点 = 恢复的 ra(调用者续跑, v0=rc 真机 b_longjmp 正字) */
+    c->pc = c->npc - 4u; c->npc = c->gpr[31];
+    c->branch_pending = 0;
+    return 0;
+}
+/* A(0x3F) printf [S stdio.s]: fmt 最小面 %s %d %u %x %c %% → 宿主 stdout, v0=字数。
+ * (真盘调试串实证: 三国志2 调用; 参数=寄存器 a1-a3 后走栈, v1 支持前 3 参+栈参) */
+static uint32_t ha_printf(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    char fmt[256]; hle_rdstr(h, A_P(0), fmt, (int)sizeof fmt);
+    char out[512]; int o = 0, ai = 1, stk = 0;
+    for (const char *f = fmt; *f && o < 480; f++) {
+        if (*f != '%') { out[o++] = *f; continue; }
+        f++;
+        if (*f == 's') { char sb[128]; hle_rdstr(h, ai<4?A_P(ai):hle_rd32(h,h->cpu->gpr[29]+16u+4u*(uint32_t)(stk++)), sb, 128);
+                         o += snprintf(out+o, sizeof out-(size_t)o, "%s", sb); ai++; }
+        else if (*f=='d'||*f=='u'||*f=='x') { uint32_t v = ai<4?A_P(ai):hle_rd32(h,h->cpu->gpr[29]+16u+4u*(uint32_t)(stk++)); ai++;
+            if (*f=='d') o += snprintf(out+o, sizeof out-(size_t)o, "%d", (int)v);
+            else if (*f=='u') o += snprintf(out+o, sizeof out-(size_t)o, "%u", v);
+            else o += snprintf(out+o, sizeof out-(size_t)o, "%x", v); }
+        else if (*f == 'c') { uint32_t v = ai<4?A_P(ai):hle_rd32(h,h->cpu->gpr[29]+16u+4u*(uint32_t)(stk++)); ai++; out[o++]=(char)v; }
+        else if (*f == '%') out[o++] = '%';
+        else { out[o++]='%'; out[o++]=*f; }
+    }
+    fwrite(out, 1, (size_t)o, stdout); fflush(stdout);
+    V0((uint32_t)o);
+    return 0;
+}
+
 static uint32_t hb_card_idle(psx_hle_t *h, uint32_t cmd)
 { (void)cmd; V0(0u); return 0; }
 static uint32_t hb_card_fail(psx_hle_t *h, uint32_t cmd)
@@ -385,6 +440,9 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->b[0x5B] = hb_pad_clear;  /* [S] ChangeClearPAD */
     h->b[0x19] = hb_hook_entry;  /* [S] HookEntryInt (北斗神拳首 UNK 实证) */
     h->b[0x35] = hb_b35_policy;  /* 未定名假设面(低锚), 见上注 */
+    h->a[0x13] = ha_bsetjmp;  h->a[0x14] = ha_blongjmp;  /* [S] sys.s */
+    h->a[0x3F] = ha_printf;                              /* [S] stdio.s */
+    h->b[0x3F] = ha_puts;   /* [R] B0 puts 别名(PSXRecomp PutsAliasFunction 真 ROM 实证) */
     h->b[0x4A] = hb_card_idle; h->b[0x4B] = hb_card_idle;  /* [S] InitCARD/StartCARD */
     h->b[0x4C] = hb_card_idle;                             /* [S] StopCARD */
     h->b[0x4E] = hb_card_fail; h->b[0x4F] = hb_card_fail;  /* [S] _card_write/read: 无卡=-1 */
@@ -406,6 +464,7 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
         hle_wr32(h, vecs[i] + 4, JRA);
         hle_wr32(h, vecs[i] + 8, NOP_);
     }
+    if (h->dev && core) psx_dev_core_attach(h->dev, core);   /* DMA 执行面 */
     cpu->on_rootcall = psx_hle_rootcall;
     cpu->hle = h;
     return 0;
@@ -858,6 +917,7 @@ int cmd_retail_probe(int argc, char **argv)
     psx_dev_init(&dev); core.dev = &dev; h.dev = &dev;
     psx_dev_trace_reset();
     psx_gpu_init(&gpu); psx_dev_gpu_attach(&dev, &gpu); psx_dev_cd_attach(&dev, &d);
+    psx_dev_core_attach(&dev, &core);   /* task-145: DMA 执行需 RAM 翻译 */
     printf("RETAIL_PROBE boot=%s entry=%08x sp=%08x gp=%08x\n",
            d.files[psx_disc_boot_exe(&d, 0, 0)].name, entry, cpu.gpr[29], cpu.gpr[28]);
     if (getenv("RETAIL_TRACE")) {         /* 首异常单步诊 + 前 16 步回环缓冲 */

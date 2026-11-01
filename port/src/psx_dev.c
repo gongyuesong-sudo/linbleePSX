@@ -2,6 +2,7 @@
  * psx_dev.c —— 设备寄存器堆 楔4 (task-110, SESSION-121)
  * 偏移域 = gpa - 0x1F800000。未登记偏移: 读 0 / 写丢弃(记录 last_unknown)。
  */
+#include "psx_core.h"
 #include "psx_dev.h"
 #include "psx_gpu.h"
 #include <stdio.h>
@@ -111,6 +112,12 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     case 0x1DAA: return 0x400u | (d->spu_stat & ~0x400u); /* bit10=传输缓冲空(恒就绪) */
     case 0x1DAC: return 0u;                        /* IRQ 状态: 无待中断 */
     case 0x1DAE: return d->spu_xfer | 0x400u;      /* 传输完成位恒置 */
+    case 0x000: case 0x010: case 0x020: case 0x030:
+    case 0x040: case 0x050: case 0x060: return d->dma_madr[off / 0x10];
+    case 0x004: case 0x014: case 0x024: case 0x034:
+    case 0x044: case 0x054: case 0x064: return d->dma_bcr[(off - 0x004) / 0x10];
+    case 0x008: case 0x018: case 0x028: case 0x038:
+    case 0x048: case 0x058: case 0x068: return d->dma_chcr[(off - 0x008) / 0x10];
     default:
         if (off < 0x400u) return d->sh[off / 4];
         return 0;
@@ -163,6 +170,39 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1DA8: d->spu_fifo = val & 0xFFFFu; break;           /* 声样半字入 FIFO: 吸收 */
     case 0x1DAA: d->spu_stat = val & 0xFFFFu; break;           /* 控制字存值可回读 */
     case 0x1DAE: d->spu_xfer = val; break;                     /* 传输基址/计数存值 */
+    /* DMA 通道 (no$psx 正字): D0-D6=0x00-0x6F (10/通道: MADR/BCR/CHCR/res),
+     * 全局=0xF0-0xFC。写 CHCR(bit30 使能 & bit28 触发)= 立即执行块传输并清
+     * bit28 —— 游戏轮询 bit28=0 判完成; 影子面旧行为(存 1 不清)=永久等待
+     * (task-145 定性: 北斗神拳 DMA2 OTAG 提交后 GPU 空闲死等)。
+     * D2=GPU: bit25=1 → MADR 缓冲 BCR 字送 GP0; 其余通道 v1=传输吸收+完成清位。 */
+    case 0x008: case 0x018: case 0x028: case 0x038:
+    case 0x048: case 0x058: case 0x068: {
+        int ch = (int)((off - 0x008) / 0x10);
+        d->dma_chcr[ch] = val;
+        if ((val & 0x40000000u) && (val & 0x10000000u)) {   /* enable+trigger */
+            if (ch == 2 && (val & (1u << 25)) && d->gpu && d->core) {  /* GPU C->V */
+                uint32_t madr = d->dma_madr[2] & 0x1FFFFFu;
+                uint32_t n = d->dma_bcr[2] & 0xFFFFu;       /* v1: 低 16 位=字数 */
+                if (n > 0x4000u) n = 0x4000u;
+                for (uint32_t z = 0; z < n; z++) {
+                    uint32_t w4;
+                    void *q = psx_translate((const psx_core_t *)d->core,
+                                            0x80000000u + ((madr + z * 4u) & 0x1FFFFFu), &w4);
+                    if (q) gpu_gp0_fwd(d->gpu, *(const uint32_t *)q);
+                }
+            }
+            d->dma_chcr[ch] = val & ~0x10000000u;           /* 完成: bit28 清零 */
+        }
+        break;
+    }
+    case 0x000: case 0x010: case 0x020: case 0x030:
+    case 0x040: case 0x050: case 0x060: {
+        int ch = (int)(off / 0x10); d->dma_madr[ch] = val; break;
+    }
+    case 0x004: case 0x014: case 0x024: case 0x034:
+    case 0x044: case 0x054: case 0x064: {
+        int ch = (int)((off - 0x004) / 0x10); d->dma_bcr[ch] = val; break;
+    }
     default:
         if (off < 0x400u) { d->sh[off / 4] = val; break; }
         break;
@@ -185,6 +225,7 @@ void psx_dev_vframe(psx_dev_t *d)
 }
 
 void psx_dev_gpu_attach(void *dev, void *gpu) { ((psx_dev_t *)dev)->gpu = gpu; }
+void psx_dev_core_attach(void *dev, void *core) { ((psx_dev_t *)dev)->core = core; }
 
 static void cd_push(psx_dev_t *d, uint8_t b)
 { if (d->cd_resp_n < 8) d->cd_resp[d->cd_resp_n++] = b; }
