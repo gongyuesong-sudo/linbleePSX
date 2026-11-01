@@ -430,3 +430,19 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - RETAIL_SIOBUSY=值 实验面(覆写游戏软 BUSY [6AF4])已入库门控, 本楔实测未改变行为(佐证
   [6AF4]=0 放行正字)。
 - 回归: 八面 118P/0F; 默认门北斗 200M served=172 exc=1 (楔24 同); 三国志2 exc=0; 窗口 hw=1。
+
+## 楔26 (SESSION-165): 驱动 vtable 全解 + DMA 票 RMW 语义 + GPUSTAT busy 窗入库
+- **驱动泵真身 = thunk 表转发**: 80051c74/80051ca4/... 全族 = `lw v0,[80076148]; lw v0,+N(v0); jalr`。
+  vtable(头 8001111c)@80076128: +4=80052690(票/DMA 属性)、+8=80052050、+0xC=80051da8、
+  +0x10=80052198、+0x14=80052468、+0x18=80052238、+0x1C=**[800750C0]=设备 CB**(50C2 就绪位所在)。
+- 80052690(a2=票号,a1=DMA 通道) 正字 = **DMA 属性 RMW**: 票槽 [8007619C+4*a2];
+  a1!=0 → 清 DMA 票 bit(a2+10) | 0x01000000(触发传输); a1==0 → 置 bit |0x01000000。
+  主线程每泵 `jal 80051c74; a0=3` = 反复申 DMA3 票(CDROM 传输)。
+- GPUSTAT bit24 = **FIFO ready(非满)**, 非 DMA busy; 游戏 while([GPUSTAT]&0x01000000)
+  自旋等 ready。v1 同步消费恒 ready → 驱动直通(非阻塞点)。
+- 新入库模型(默认开): GP0 字/GP1 写后 `gpu_busy_until=now+564456`(1 帧), 窗内 GPUSTAT
+  清 bit24 = 真机命令突发时 FIFO 非 ready 的物理形态。dev 断言 gpu_gp0_port1810 复原 16P/0F。
+- 现状不动点: 主线程泵 pc=800510A0 区(DMA 票循环+GetTickWait), 43A8 仍无递增者, gp0=4。
+  **卡点收敛为单点**: DMA3 票申了但 CDROM 传输服务未回流(票触发→CD 读→完成票/计数器)。
+- 楔27 战役: DMA3 票 → CDROM 读 → 完成回环(游戏侧 DMA 票消费 + [80076198] 状态推进);
+  候选缺口 = ReadSector 命令字面(CD 命令寄存器观测面)或 DMA3 CHCR 触发未被票路径走到。

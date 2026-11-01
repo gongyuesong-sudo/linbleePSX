@@ -175,7 +175,18 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
                   * no$psx GPUSTAT byte1 = ready(0=busy)。字节读由 word 折叠:
                   * 0x1800/0x1804 共享同一 4B 窗 -> 统一返回 ready 字。 */
         return d->gp1_last;
-    case 0x1814: return (d->gp0_n < 4 ? (1u << 24) : 0u) | (1u<<26) | (1u<<28) | (1u<<12);
+    case 0x1814: {
+        /* 楔26: 真机 DMA 提交后 GPU busy→ready 边沿=驱动完成握手(游戏在
+         * [GPUSTAT]&0x1000000 上 while 自旋, 见 80051b54)。v1 同步 GPU 恒 ready
+         * 使票永远卡死。建模: 命令/GP1 写入起 ~1 帧内报 busy, 之后回 ready。 */
+        uint32_t base = (d->gp0_n < 4 ? (1u << 24) : 0u) | (1u<<26) | (1u<<28) | (1u<<12);
+        extern uint32_t g_cur_pc; (void)g_cur_pc;
+        if (d->gpu_busy_until && psx_sysclk_provider) {
+            if (psx_sysclk_provider() < d->gpu_busy_until) base &= ~(1u << 24);  /* busy=非 ready */
+            else d->gpu_busy_until = 0u;
+        }
+        return base;
+    }
                                 /* GPUSTAT 正字(no$psx 1F801814 读): bit24 ready-cmd, bit26 ready-VRAM,
                                  * bit28 ready-DMA-block, bit12 DMA active=0 面; 同步光栅器恒就绪 */
     case 0x181C: return 0u;   /* GPU ACK: 无错 */
@@ -266,6 +277,8 @@ case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 
         if (size >= 4) {                                /* 字推送 = 入队+转发 */
             if (d->gp0_n < 4) d->gp0_fifo[d->gp0_n++] = val;
             d->gpu_port = val;
+            /* 楔26: 提交即 busy 1 帧(驱动完成握手边沿) */
+            if (psx_sysclk_provider) d->gpu_busy_until = psx_sysclk_provider() + 564456u;
             if (d->gpu) gpu_gp0_fwd(d->gpu, val);
         } else if (size == 2) {                          /* 半字 = 窗口 LSB 半累积(outb 面) */
             d->gpu_port = (d->gpu_port & 0xFFFF0000u) | (val & 0xFFFFu);
@@ -284,7 +297,9 @@ case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 
             if (d->gp0_n < 4) d->gp0_fifo[d->gp0_n++] = d->gpu_port;
             if (d->gpu) gpu_gp0_fwd(d->gpu, d->gpu_port);
         }
-        break;    case 0x1814: case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;  /* GP1 正字 1F801814 */
+        break;    case 0x1814: case 0x1804: d->gp1_last = val;
+            if (psx_sysclk_provider) d->gpu_busy_until = psx_sysclk_provider() + 564456u;  /* 楔26 */
+            if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;  /* GP1 正字 1F801814 */
     /* SPU 控制面 (task-148 定案): 0x1C00-0x1DFF 区不做专案, 全落 64KB 影子回读面
      * ——真机 SPU 控制字可读回, 游戏做 lhu/ori/sh RMW 握手(北斗神拳 80058b94 实证:
      * 写 [0x1aa]|0x30 后轮询 [0x1aa]&0x30), 专案截胡致写读不一致 → 死等超时。 */
