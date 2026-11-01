@@ -608,3 +608,17 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   ra=80051164` = B0:0x35 rootcall 走入异常面(非 served 路); 修后 GPU 命令流望续涨。
 - 回归: 八面 8/8 PASS; 三国志2/NBA/Striker 30M exc=0 零误伤, Striker pc 前移至 80169760。
 - port commit 见 git log; mirror 同步 ahead=0。
+
+## 楔37 (SESSION-176): B0 syscall 异常面 = **双阶段 rootcall thunk**（t2 页派发未建模）
+- SYSTR 正字: `vec=t1=t2=8005BEFC code=0 @pc=8004F458` (撤回本楔 vec&0xFF 折叠补丁——
+  折出 0xFC 无语义, 树已净)。
+- 活体钉 `8005BF24` 双阶段面: `sw ra,[D3E70]` → `jal 8004F454`(syscall 0 陷入) →
+  返回后才 `addiu t1,0x56; addiu t2,0xB0; jalr $t2` = **真机第二阶段跳 BIOS
+  KSEG0 页 0x800000B0 派发器**, 本核无该页 → 整链断, B(0x56)=GetVideoMode
+  [PSn00bSDK b 表 id86] 未达(后文 `lw 0x70(v0)` 取 vmode 字段闭环印证)。
+- WPC key=0 (pc=0x80000080 hits=0) = syscall 异常入游戏自装 handler 路**未跑**
+  (LIBSN 面由 CARD init 装, 与 t2 页派发同缺口族)。
+- 楔38 修法(已设计): t2∈RAM 页指针 + `jr $t2` 目标低 8 位∈{80,A0,B0,C0} →
+  从 t1 或 caller 语义取号交表派发; 或建 4×256 向量页 stub 面(jr $ra+nop 族)。
+  异常面本身良性(excite=1 后水位派发恢复, 泵照跑)。
+- 回归: 本楔无转正改动, port 树=楔36 态(4eeafc6), 八面 8/8 基线不变。
