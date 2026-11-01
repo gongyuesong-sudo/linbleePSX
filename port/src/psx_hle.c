@@ -22,7 +22,8 @@ static uint32_t *gw(psx_hle_t *h, uint32_t gpa)
 static uint32_t hle_rd32(psx_hle_t *h, uint32_t gpa)
 { uint32_t *p = gw(h, gpa & ~3u); uint32_t v = 0; if (p) memcpy(&v, p, 4); return v; }
 static int hle_wr32(psx_hle_t *h, uint32_t gpa, uint32_t v)
-{ uint32_t *p = gw(h, gpa & ~3u); if (!p) return -1; *p = v; return 0; }
+{ uint32_t *p = gw(h, gpa & ~3u); if (!p) return -1;
+*p = v; return 0; }
 static uint8_t hle_rd8(psx_hle_t *h, uint32_t gpa)
 { uint32_t w; void *p = psx_translate(h->core, gpa, &w); return p ? *(uint8_t *)p : 0; }
 static int hle_cprange(psx_hle_t *h, uint32_t dst, uint32_t src, uint32_t n)
@@ -153,21 +154,16 @@ static uint32_t ha_puts(psx_hle_t *h, uint32_t cmd)
  * bits29-30=DMA dir)。软光栅恒 ready(同步面), DMA 忙判定走 dev GPUSTAT 实值。 */
 static uint32_t ha_gpu_cw(psx_hle_t *h, uint32_t cmd)
 {
-    /* [R] 语义: 同步判 GPU ready → 写命令词 → v0=0。
-     * 同步软光栅器恒 ready (GPUSTAT bit24/26/28=1 语义即"就绪");
-     * 真机 DMA 忙等 = 异步面, 本核同步面诚实不模拟 (docs/113)。 */
-    uint32_t w = A_P(0);
-    { extern unsigned hle_dbg_cw; hle_dbg_cw++; }
-    if (h->dev) {
-        psx_dev_write((psx_dev_t *)h->dev, 0x1810u, w, 4);
-        V0(w);   /* 假设面(低锚, 待真机钉): 北斗神拳把返回值直接解引用
-                  * (sw $zero,0($v0)) → 语义=回显入参缓冲指针; [R] 的 v0=0
-                  * 与该盘证伪, 待更多盘交叉定 name (docs/113 记账) */
-    } else { V0((uint32_t)-1); }    /* 无设备堆 = 未接线, 诚实不装 */
+    /* A(0x49) GPU_cw(cmd): 高锚=OpenBIOS openbios/gpu/gpu.c (经 PSXRecompStudio
+     * BiosGpuCommandServiceTests 引用钉): GPU_sync 后写 GP0 一个命令词, 返回 0。
+     * 本核 GPU 同步即时消费, FIFO 恒不满 → sync 面直接过; v0=0 高锚回正。 */
+    (void)cmd;
+    uint32_t w = hle_rd32(h, h->cpu->gpr[4]);   /* a0=缓冲指针? OpenBIOS 语义=命令词值 */
+    if (h->dev) psx_dev_write(h->dev, 0x1810, w, 4);
+    extern unsigned hle_dbg_cw; hle_dbg_cw++;
+    V0(0u);
     return 0;
 }
-/* B(0x19) HookEntryInt(a0=entry) [S sys.s]: 挂 BIOS 异常 entry 链, v0=旧 entry。
- * HLE 面: 服务不经过 CPU 异常, 钩仅登记不伪造触发 (诚实边界 docs/113)。 */
 static uint32_t hb_hook_entry(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd;
@@ -469,6 +465,10 @@ int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
         { free(img); return -6; }
     free(img);
     if (d->cnf_stack) sp_base = d->cnf_stack;   /* SYSTEM.CNF STACK= 正字 (真盘变体) */
+    { uint32_t ww2; void *pw = psx_translate(h->core, 0x8007FA90u, &ww2);
+      void *pz = psx_translate(h->core, 0x80010000u, &ww2);
+      fprintf(stderr, "COLDPOST [FA90]=%08x [DVA+0]=%08x entry=%08x\n",
+              pw ? *(uint32_t*)pw : 0xDEDu, pz ? *(uint32_t*)pz : 0xDEDu, pc); }
     psx_cpu_t *c = h->cpu;
     c->gpr[28] = gp;
     c->gpr[29] = sp_base ? (sp_base - 16u) : 0x801FFFF0u;
@@ -824,6 +824,7 @@ int cmd_retail_probe(int argc, char **argv)
     if (getenv("RETAIL_TRACE")) {         /* 首异常单步诊 + 前 16 步回环缓冲 */
         uint32_t budget = getenv("RETAIL_BUDGET") ? (uint32_t)strtoul(getenv("RETAIL_BUDGET"),0,0) : 4000000u;
         struct { uint32_t pc, ins, t1, t2, v0, a0, ra; } rb[64]; int rn = 0;
+        uint32_t wb_pc = 0, wb_val = 0; int wb_n = 0;   /* 0x8007FA90 写者追踪 */
         for (uint32_t i = 0; i < budget; i++) {
             uint32_t w; void *q = psx_translate(&core, cpu.npc, &w);
             uint32_t ins = q ? *(uint32_t *)q : 0xDEADBEEFu;
@@ -831,12 +832,41 @@ int cmd_retail_probe(int argc, char **argv)
             rb[rn & 63].t2 = cpu.gpr[10]; rb[rn & 63].v0 = cpu.gpr[2]; rb[rn & 63].a0 = cpu.gpr[4];
             rb[rn & 63].ra = cpu.gpr[31];
             rn++;
-            psx_cpu_step(&cpu);
+            {   /* 监视核心数据槽 0x8007FA90 的写入 (SW/SH/SB 覆盖检测) */
+                uint32_t w2; void *qp = psx_translate(&core, 0x8007FA90u, &w2);
+                uint32_t before = qp ? *(uint32_t*)qp : 0u;
+                psx_cpu_step(&cpu);
+                uint32_t after = qp ? *(uint32_t*)qp : 0u;
+                if (qp && after != before && wb_n < 40) {
+                    fprintf(stderr, "WB%02d @%08x ins=%08x val %08x->%08x\n",
+                            wb_n++, cpu.pc, ins, before, after);
+                    fflush(stderr);
+                }
+            }
             if (cpu.exc_n) {
-                { uint32_t ww; void *q2 = psx_translate(&core, cpu.cop0[14], &ww);
-                  fprintf(stderr, "RT EXC#%u cause=%x epc=%x badv=%x pc=%x t1=%x t2=%x sc=%x ins@epc=%08x\n",
-                          cpu.exc_n, cpu.cop0[13], cpu.cop0[14], cpu.cop0[8], cpu.pc, cpu.gpr[9],
-                          cpu.gpr[10], cpu.syscall_code, q2 ? *(uint32_t*)q2 : 0xFFFFFFFFu); }
+                uint32_t ww; void *q2 = psx_translate(&core, cpu.cop0[14], &ww);
+                fprintf(stderr, "RT EXC#%u cause=%x epc=%x badv=%x v0=%x v1=%x a0=%x a1=%x ins=%08x\n",
+                        cpu.exc_n, cpu.cop0[13], cpu.cop0[14], cpu.cop0[8],
+                        cpu.gpr[2], cpu.gpr[3], cpu.gpr[4], cpu.gpr[5],
+                        q2 ? *(uint32_t*)q2 : 0xFFFFFFFFu);
+                uint32_t dreg[4] = { cpu.gpr[4], cpu.gpr[5], cpu.gpr[6], cpu.gpr[7] };
+                char dn[4] = { 'a','b','c','d' };
+                for (int dqi = 0; dqi < 4; dqi++) {
+                    uint32_t base = dreg[dqi] & ~3u;
+                    if (base < 0x80000000u || base > 0x80200000u) continue;
+                    fprintf(stderr, "RT DUMP$%c0:", dn[dqi]);
+                    for (int wz = 0; wz < 8; wz++) {
+                        void *q3 = psx_translate(&core, base + (uint32_t)wz * 4u, &ww);
+                        fprintf(stderr, " %08x", q3 ? *(uint32_t*)q3 : 0xDEADBEEFu);
+                    }
+                    fprintf(stderr, "\n");
+                }
+                fprintf(stderr, "RT EPCW:");   /* epc 前后 8 词指令窗 */
+                for (int wz = -4; wz < 4; wz++) {
+                    void *q4 = psx_translate(&core, (cpu.cop0[14] & ~3u) + (uint32_t)wz * 4u, &ww);
+                    fprintf(stderr, " %08x", q4 ? *(uint32_t*)q4 : 0xDEADBEEFu);
+                }
+                fprintf(stderr, "\n");
                 int base = rn - 1;
                 for (int k = 40; k >= 0; k--) {
                     int idx = (base - k) & 63;
@@ -871,6 +901,18 @@ int cmd_retail_probe(int argc, char **argv)
       printf("RETAIL_PROBE rc=%lu reject=%lu maxdepth=%lu cw=%u\n", hle_dbg_calls, hle_dbg_reject, hle_dbg_maxdepth, hle_dbg_cw); }
         printf("RETAIL_PROBE ran=%u served=%u unknown=%u exc=%u cause=%x epc=%x pc=%08x npc=%08x\n",
            done, h.nlog, h.unk_n, cpu.exc_n, cpu.cop0[13], cpu.cop0[14], cpu.pc, cpu.npc);
+    {   /* 首异常现场: badv + epc 指令窗 + 关键寄存器 (task-142 死环钉字) */
+        uint32_t wwz;
+        printf("RETAIL_EXC badv=%08x regs v0=%08x v1=%08x a0=%08x a1=%08x t0=%08x t1=%08x sp=%08x\n",
+               cpu.cop0[8], cpu.gpr[2], cpu.gpr[3], cpu.gpr[4], cpu.gpr[5],
+               cpu.gpr[8], cpu.gpr[9], cpu.gpr[29]);
+        printf("RETAIL_EXC epcw:");
+        for (int wz = -3; wz <= 2; wz++) {
+            void *qz = psx_translate(&core, (cpu.cop0[14] & ~3u) + (uint32_t)wz * 4u, &wwz);
+            printf(" %08x", qz ? *(uint32_t*)qz : 0xDEADBEEFu);
+        }
+        printf("\n");
+    }
     psx_dev_trace_dump(14);
     if (hot) {
         for (int pass = 0; pass < 10; pass++) {

@@ -39,3 +39,15 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - `--retail <盘>`: 盘面元数据; `--retail-probe <盘> [cycles]`: 帧节拍跑+缺口报告
   (rc/reject/maxdepth/cw 计数+未登记直方图+GPU 计数)。
 - RETAIL_TRACE=1 首异常 40 步回环; RETAIL_STEP=1 帧进度; RETAIL_HOT=1 pc 热点(慢)。
+
+## SESSION-142 追加 (楔 4/5)
+- **GPU_cw 高锚回正**: PSXRecompStudio 测试注释直引 **OpenBIOS openbios/gpu/gpu.c**
+  ("GPU_sync, then GP0 write", Issue #701, ReturnValue=0)——清洁房最高来源档。
+  v0=0 回正后 trace 实证游戏**已过 800456FC 旧卡点**(v0 泄漏假说作废: 那只是前一站症状)。
+- **冷装载排除自证**: COLDIMG 现场对照 = img[0]=PS-X EXE 头 / img[0x800]=RAM[DVA] 逐词一致,
+  **loader 无 bug**。本会话 python 复核曾用 2048-stride 直读 2352 盘误算"数据段缺失"= 假警报,
+  教训入钉: 复核物理偏移必须 stride 2352 + data_off。
+- **新死环定性**(真帧节拍): epc=800587D4 `sh $v0,0x1AA($v1)` badv=9463941B(奇)
+  v1=0x94639271 —— andi 0xFFCF/ori 0x10/sh 序列 = **游戏自解包器(LZSS 族)**;
+  源指针槽 [0x800763E8] 污染 = 下一个 rootcall 语义洞。无节拍 trace 模式已过此点(时序相关)。
+- RETAIL_EXC 永久首异常现场(v0/v1/a0/a1/t0/t1/sp + epc±3 指令窗)入常规探针输出。
