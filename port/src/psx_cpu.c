@@ -8,6 +8,8 @@
  */
 #include "psx_cpu.h"
 #include "psx_dev.h"
+uint64_t g_psx_cpu_sysclk = 0;                     /* task-152: 主钟 = 当前 CPU 周期 */
+static uint64_t psx_cpu_sysclk(void) { return g_psx_cpu_sysclk; }
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +137,8 @@ static int irq_check(psx_cpu_t *c)
 
 int psx_cpu_step(psx_cpu_t *c)
 {
+    g_psx_cpu_sysclk = c->cycles;
+    if (c->core && c->core->dev) psx_dev_sync((psx_dev_t *)c->core->dev);
     if (irq_check(c)) { c->cycles++; return 0; }
     uint32_t insn;
     void *fp;
@@ -343,6 +347,7 @@ int psx_cpu_step(psx_cpu_t *c)
 
 void psx_cpu_reset(psx_cpu_t *c, const psx_core_t *core)
 {
+	psx_dev_set_sysclk(psx_cpu_sysclk);   /* task-152: 主钟注入 */
     memset(c, 0, sizeof *c);
     c->core = core;
     c->pc  = 0xBFC00000u - 4;   /* PSX 硬复位走 BIOS 向量 */

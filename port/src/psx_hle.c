@@ -1199,6 +1199,10 @@ int cmd_retail_probe(int argc, char **argv)
             g_watch_done_gpa = 0xFFFFFFFFu;
         }
         if (getenv("RETAIL_CB")) psx_hle_vblank_fire(&h, dev.vframes);   /* task-149 实验门控: 派发语义待真机钉, 默认关 */
+        {   /* task-152: BIOS VBlank 给已 enable 事件投递票(Test/WaitEvent 消费) */
+            for (uint32_t z = 0; z < HLE_EV_MAX; z++)
+                if (h.ev[z].class != 0xFFFFFFFFu && h.ev[z].enabled) h.ev[z].fired = 1;
+        }
         if (getenv("RETAIL_STEP")) {            /* 帧级进度诊 */
             printf("RF done=%u pc=%x exc=%u nlog=%u gp0=%u\n",
                    done, cpu.pc, cpu.exc_n, h.nlog, gpu.gp0_words);
@@ -1278,6 +1282,11 @@ int cmd_retail_probe(int argc, char **argv)
       printf("RETAIL_PROBE gp0hist: f0=%u f1=%u f2=%u f3=%u f4=%u f5=%u f6=%u f7=%u disp=%x\n",
              g_gp0_hist[0], g_gp0_hist[1], g_gp0_hist[2], g_gp0_hist[3],
              g_gp0_hist[4], g_gp0_hist[5], g_gp0_hist[6], g_gp0_hist[7], gpu.disp_on); }
+    { const char *tw = getenv("RETAIL_TIMERS");
+      if (tw) for (int t = 0; t < 4; t++)
+          printf("RETAIL_TIM T%d ctrl=%04x cnt=%u target=%u last_sync=%llu\n", t,
+                 dev.timer_ctrl[t], dev.timer_cnt[t], dev.timer_target[t],
+                 (unsigned long long)dev.timer_last_sync[t]); }
     printf("RETAIL_PROBE gpu vframes=%u gp_ticks=%u gp0=%u gp1=%u fill=%u xfer=%u tri=%u spr=%u\n",
            dev.vframes, gpu.frames, gpu.gp0_words, gpu.gp1_words, gpu.fill_px, gpu.xfer_px, gpu.tri_px, gpu.spr_px);
     for (int z = 0; z < 48; z++) if (h.unk[z].cnt)

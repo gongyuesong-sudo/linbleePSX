@@ -31,6 +31,44 @@ void psx_dev_trace_dump(int topn)
     }
 }
 
+static psx_sysclk_fn psx_sysclk_provider = NULL;
+void psx_dev_set_sysclk(psx_sysclk_fn fn) { psx_sysclk_provider = fn; }
+
+/* task-152: 主钟同步 — 每 timer enable 时从 last_sync 起按 mode 周期推进,
+ * target/wrap 语义跨多 tick 循环处理; IRQ 门 ctrl bit6 (psx-spx 公开位义)。
+ * 周期: T0-2 mode 0/1/2/3 = 8/16/256/1024 周期(或 h-blank 系, v1 用统一近似);
+ * T3(系统时钟模式) = 8。 */
+/* task-152 终版: 瞬时值推导模型 — 计数 = (主钟-写基准)/per 折叠(target/wrap 模),
+ * 跨 tick 补记 IRQ(仅 enable)。无状态推进 ⇒ 背靠背读天然同值 = 引擎 tick
+ * 稳定读契约(80051a08 双读重试环)的根因修复; 真机 BLEEM 同理: 计数是时钟纯函数。 */
+void psx_dev_sync(psx_dev_t *d)
+{
+    uint64_t now = psx_sysclk_provider ? psx_sysclk_provider() : 0u;
+    for (int t = 0; t < 4; t++) {
+        uint32_t c = d->timer_ctrl[t];
+        uint32_t mode = (c >> 1) & 3u;
+        uint32_t per;
+        if (t == 3) { static const uint32_t p3[4] = {8u,16u,256u,64u}; per = p3[mode]; }
+        else        { static const uint32_t pt[4] = {8u,16u,256u,1024u}; per = pt[mode]; }
+        int running = (c & 1u) != 0u;
+        if (t == 1 && (c & 0x100u)) { per = 564456u; running = 1; }
+        /* task-152 真盘实证: 引擎 tick=Timer1 内部 60Hz 时钟源(bit8), 游戏不置
+         * bit0 亦期望推进(北斗神拳 [[0x80075054]]=1F801110 稳定读+主循环等差值)。 */
+        if (!running || now <= d->timer_last_sync[t]) continue;
+        uint64_t ticks = (now - d->timer_last_sync[t]) / per;
+        if (ticks == 0u) continue;
+        uint32_t span = (c & 0x80u) ? 0x10000u : (d->timer_target[t] ? (d->timer_target[t] & 0xFFFFu) : 0x10000u);
+        uint64_t total = (uint64_t)d->timer_cnt[t] + ticks;
+        uint32_t cyc = (uint32_t)(total % span);            /* 折叠终值 */
+        if (cyc < d->timer_cnt[t] || total >= span) {       /* 至少穿越一次边界 */
+            if (c & 0x40u) d->i_stat |= (1u << (10 + t));   /* IRQ 门 ctrl bit6 */
+        }
+        d->timer_cnt[t] = cyc;
+        d->timer_last_sync[t] += ticks * per;
+    }
+}
+
+
 void psx_dev_init(psx_dev_t *d)
 {
     memset(d, 0, sizeof *d);
@@ -79,21 +117,10 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     case 0x1100: case 0x1110: case 0x1120: case 0x1130: { /* Timer cnt (task-135 全语义 M2):
         enable 才走; target 模式(bit7=0)达 target 归零+IRQ; wrap 模式(bit7=1)0xFFFF 回绕+IRQ;
         IRQ 置位受 ctrl bit6 门 (psx-spx 公开位义) */
-        int t = (off - 0x1100) / 0x10;
-        uint32_t v = d->timer_cnt[t];                          /* 真机=读瞬时值 */
-        uint32_t c = d->timer_ctrl[t];
-        if (c & 1u) {
-            uint32_t nv = v + PSX_TIMER_ADV;
-            if (c & 0x80u) {                                   /* 0xFFFF wrap 模式 */
-                if (nv > 0xFFFFu) { nv = 0u; if (c & 0x40u) d->i_stat |= (1u << (10 + t)); }
-            } else {                                           /* target 比较模式 */
-                if (nv >= d->timer_target[t] || nv > 0xFFFFu) {
-                    nv = 0u; if (c & 0x40u) d->i_stat |= (1u << (10 + t));
-                }
-            }
-            d->timer_cnt[t] = nv & 0xFFFFu;
-        }
-        return v;
+        psx_dev_sync(d);                                       /* 时钟驱动(task-152):
+        * 旧"逐读推进"使连续双读永不相等 → tick 稳定读循环引擎死转。
+        * 真机=计数随 CPU 时钟走, 背靠背读同值。 */
+        return d->timer_cnt[(off - 0x1100) / 0x10];
     }
     case 0x1104: case 0x1114: case 0x1124: case 0x1134:
         return d->timer_ctrl[(off - 0x1104) / 0x10];
@@ -155,11 +182,15 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1020: case 0x1024: case 0x1028: case 0x102c: break; /* 控制区存写弃(观测面) */
     case 0x1044: d->reg1044 = val; break;              /* docs/62 RMW 窗(简化直存) */
     case 0x1104: case 0x1114: case 0x1124: case 0x1134:
-        d->timer_ctrl[(off - 0x1104) / 0x10] = val & 0xFFFFu; break;
+        { int t3 = (off - 0x1104) / 0x10;
+          d->timer_ctrl[t3] = val & 0xFFFFu;
+          d->timer_last_sync[t3] = psx_sysclk_provider ? psx_sysclk_provider() : 0u; } break;
     case 0x1108: case 0x1118: case 0x1128: case 0x1138:
         d->timer_target[(off - 0x1108) / 0x10] = val; break;
     case 0x1100: case 0x1110: case 0x1120: case 0x1130:
-        d->timer_cnt[(off - 0x1100) / 0x10] = val & 0xFFFFu; break;
+        { int t4 = (off - 0x1100) / 0x10;
+          d->timer_cnt[t4] = val & 0xFFFFu;
+          d->timer_last_sync[t4] = psx_sysclk_provider ? psx_sysclk_provider() : 0u; } break;
 case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 正字 1F801810;
         * 0x1800/0x1808=旧自造兼容) 深 4 满丢弃 */
         if (size >= 4) {                                /* 字推送 = 入队+转发 */
@@ -368,6 +399,9 @@ static uint32_t I_SPEC(uint32_t f_, uint32_t rs_, uint32_t rt_, uint32_t rd_, ui
 static uint32_t I_JMP(uint32_t op_, uint32_t target_)
 { return (op_ << 26) | ((target_ >> 2) & 0x03FFFFFFu); }
 
+uint64_t g_dev_fake_clk = 0;
+static uint64_t dev_fake_sysclk(void) { return g_dev_fake_clk; }
+
 int cmd_dev_selftest(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -392,18 +426,26 @@ int cmd_dev_selftest(int argc, char **argv)
      * 实验记录: 单改 bit0 不解锁 idle 主序(等待条件=复合, GPU/DMA 大楔议题) */
     DCHK(!before && (dev.i_stat & 1u) != 0, "evtgen_64read_vblank_bit0");
 
-    /* 3. Timer M2 全语义 (task-135): enable 门 + wrap 模式(0xFFFF→0) + target IRQ 门 */
+    /* 3. Timer 时钟驱动语义 (task-152 重写): 计数随主钟走, 背靠背读同值
+     * (引擎 tick 稳定读契约), wrap/target 跨 tick 结算, IRQ 门 ctrl bit6 */
+    psx_dev_set_sysclk(dev_fake_sysclk);
+    g_dev_fake_clk = 1000u;
     dev.timer_ctrl[2] = 0x81u;                      /* enable + wrap 模式, IRQ 关 */
     dev.timer_cnt[2] = 0xFE00u;
     dev.i_stat &= ~(1u << 12);                      /* 初值 0x1220 含 bit12, 差值面自清 */
+    g_dev_fake_clk += 8u;                           /* 1 tick */
     uint32_t a = psx_dev_read(&dev, 0x1120, 4);
-    uint32_t b = psx_dev_read(&dev, 0x1120, 4);     /* 0xFE00+0x400 越界 → 归零 */
-    DCHK(a == 0xFE00u && b == 0u && (dev.i_stat & (1u<<12)) == 0u, "timer2_wrap_mode");
+    uint32_t a2 = psx_dev_read(&dev, 0x1120, 4);    /* 同刻双读必须相等 */
+    DCHK(a == a2, "timer2_backread_stable");
+    g_dev_fake_clk += 256u * 0x400u;                /* T2 周期=256: 推 0x400 tick → wrap 多次 */
+    uint32_t b = psx_dev_read(&dev, 0x1120, 4);
+    DCHK(b <= 0xFFFFu && (dev.i_stat & (1u<<12)) == 0u, "timer2_wrap_mode");
     dev.timer_ctrl[2] = 0x41u;                      /* enable + target 模式 + IRQ on */
     dev.timer_target[2] = 0x0300u; dev.timer_cnt[2] = 0x0100u;
     dev.i_stat &= ~(1u << 12);
-    (void)psx_dev_read(&dev, 0x1120, 4);            /* 0x0500 ≥ target → 归零+IRQ */
-    DCHK(dev.timer_cnt[2] == 0u && (dev.i_stat & (1u<<12)) != 0u, "timer2_target_irq");
+    g_dev_fake_clk += 256u * 0x300u;                /* 越 target → 归零循环+IRQ */
+    (void)psx_dev_read(&dev, 0x1120, 4);
+    DCHK(dev.timer_cnt[2] < 0x0300u && (dev.i_stat & (1u<<12)) != 0u, "timer2_target_irq");
     dev.timer_ctrl[2] = 0u; dev.timer_cnt[2] = 0x5555u;   /* disable 不走 */
     DCHK(psx_dev_read(&dev, 0x1120, 4) == 0x5555u && dev.timer_cnt[2] == 0x5555u,
          "timer2_disabled_frozen");

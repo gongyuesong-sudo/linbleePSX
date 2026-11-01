@@ -37,7 +37,8 @@ typedef struct psx_dev_s {
     uint32_t cd_bytes;          /* 最近 ReadN 装载字节数 */
     uint32_t ram_size;          /* 0x1F801060 RAM_SIZE(楔6d: BIOS 写后回读) */
     /* Timer (docs/63): cnt=读推进模型 M1; ctrl 常规 R/W */
-    uint32_t timer_cnt[4];      /* 0x1100/1110/1120/1130 */
+    uint32_t timer_cnt[4];      /* 0x1100/1110/1120/1130 (时钟驱动, task-152) */
+    uint64_t timer_last_sync[4]; /* 各 timer 上次结算的主钟刻度 (task-152) */
     uint32_t timer_ctrl[4];     /* 0x1104/1114/1124/1134 */
     uint32_t timer_target[4];   /* 0x1108/1118/1128/1138 */
     /* C2 私有握手窗 (docs/62) */
@@ -75,6 +76,9 @@ int      cmd_dev_selftest(int argc, char **argv);
 /* 清洁房楔5: GPU 附着 (GP0/GP1 口转发) */
 void     psx_dev_core_attach(void *dev, void *core);   /* DMA 执行需 RAM 面 */
 void     psx_dev_gpu_attach(void *dev, void *gpu);
+typedef uint64_t (*psx_sysclk_fn)(void);
+void     psx_dev_set_sysclk(psx_sysclk_fn fn);   /* CPU 主钟注入 (task-152) */
+void     psx_dev_sync(psx_dev_t *d);             /* timer 按主钟结算 */
 /* 帧节拍注入 (task-135): 真机 VBlank 源 = I_STAT bit0 置位 (IRQ 链走 irq_check)
  * + 四路 33.87MHz/4 计数器粗步长推进 (v1 仅根节拍, 精确分频后续楔) */
 void     psx_dev_vframe(psx_dev_t *d);
