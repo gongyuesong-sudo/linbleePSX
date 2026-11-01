@@ -218,3 +218,26 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   UNK=0 exc=1; 三盘 200M 全净; 八面 115P/0F; 窗口 hw=1。
 - **下楔**: 0x8003F414 处 HOT/等待面新取证; gp0hist f0=6(OTZ 少)——主循环若
   活, 追渲染路径是否首次真正建帧(disp 仍 0)。
+
+## SESSION-153 追加 (楔 15 — R3000 异常出入口正字 + 派发时机翻案)
+- **派发时机翻案**: 北斗神拳主线程**全程 IE=0**(IRQDBG 钉死)——LIBSN 世代真机 BIOS
+  在**每次 rootcall 陷入时**服务设备链(3-19 内核), 硬件中断到达不是派发点。
+  RFE 派发因此挂两触发面(irq_check + rootcall 服务点 vframe 水位), 均 `RETAIL_RFE` 门控。
+- **R3000 出入口正字**: 异常入口 EXL←IE、IE←0; rfe=(IE←旧EXL, EXL←0, ERL=1) 与 eret 分义。
+  旧 rfe≡eret → 用户态 LIBSN dispatcher 出口 IE 永不归位。
+- **[HookEntryInt 槽] = 派发器恢复地址+1 标记**(0x80051E11: SetEntryjmpBuf 返回点 E10,
+  v0==0 首进分支/v0!=0 恢复泵分支): 三错=未掩 LSB(奇址乱码)/未置 v0=1(走错分支)/
+  未存帧(jr $ra 毁主线)。影子帧模型 ctx_saved+saved_gpr[32] 落地, B0:17 = 帧恢复+rfe 正字。
+- **自家手误双案发现场**:
+  1. python 切片重写块把 `if (dispw)` 跳 0x180 转发分支切丢 → 一切游戏自装 dispatcher
+     被吞源兜底吞掉(ENG e1 当场 FAIL 抓获)。教训: 大块替换后必须 `git diff` 目检删失。
+  2. RCHIST `getenv` 落进步热路(20 万次/步)拖慢 10x, **污染三盘对照数据**——
+     三国志2"RFE 风暴"实为 getenv 性能+误跳混合; 诊断面自身必须是零开销或门控前置。
+- **b0:08/0A/0B/0C 翻案二**: a0=0x19000000 = **我们自家 OpenEvent 哨柄**(a1/a2 是调用者
+  残留寄存器非参数); 北斗 RCEND 画像 b0:0A x97 = 事件队列 API 主用户。观测参数必须与
+  自家返回值编码对照后再定语义(已入 skill 钉)。
+- **回归基线**: 八面 115P/0F; 三盘 200M: 北斗 exc=1(80051078 区活跃)/三國志2 exc=0/
+  NBA exc=0 UNK=3(A0:19/1B 无公开名=诚实不猜); 窗口 hw=1。
+- **下楔**: ①北斗 rootcall 水位派发开启后泵仅 3 拍=泵内 B0:0A WaitEvent 语义要接
+  事件票(VBlank fired 面已有, 但泵在等**设备**事件而非 vsync——按 dev/class 投递);
+  ②三國志2/北斗 dispw-180 转发恢复后首次可跑通游戏自装 dispatcher, 复查 HOT。

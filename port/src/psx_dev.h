@@ -82,6 +82,7 @@ void     psx_dev_sync(psx_dev_t *d);             /* timer 按主钟结算 */
 /* 帧节拍注入 (task-135): 真机 VBlank 源 = I_STAT bit0 置位 (IRQ 链走 irq_check)
  * + 四路 33.87MHz/4 计数器粗步长推进 (v1 仅根节拍, 精确分频后续楔) */
 void     psx_dev_vframe(psx_dev_t *d);
+uint32_t psx_dev_vframes_get(psx_dev_t *d);   /* task-153: rootcall 派发水位 */
 /* 清洁房楔3: 盘装载附着 + 集成探针 (psx_cdrom selftest 消费; 0=PASS) */
 void     psx_dev_cd_attach(psx_dev_t *d, void *disc /* psx_disc_t* */);
 int      psx_cd_dev_integration_probe(void);

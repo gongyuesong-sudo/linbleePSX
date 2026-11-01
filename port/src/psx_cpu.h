@@ -26,7 +26,12 @@ typedef struct psx_cpu_s {
     uint32_t cycles;
     uint32_t exc_n;
     uint32_t syscall_code;
-    uint32_t entry_hook;   /* LIBSN HookEntryInt 中断派发钩子 (task-150, HLE 维护) */   /* task-136: 最近 syscall 指令 code 位段 */      /* 异常进入计数 */
+    uint32_t entry_hook;   /* LIBSN HookEntryInt 中断派发钩子 (task-150, HLE 维护) */
+    /* BIOS RFE 派发上下文影子 (task-153): 进派发器前存主线程全量现场,
+     * B0:17 ReturnFromException 恢复(真机 BIOS 把帧存它自己的 RAM 镜像, 此处宿主侧) */
+    int      ctx_saved;
+    uint32_t saved_pc, saved_npc, saved_status, saved_epc, saved_cause;
+    uint32_t saved_gpr[32];   /* task-136: 最近 syscall 指令 code 位段 */      /* 异常进入计数 */
     int      branch_pending;
     uint32_t branch_target;
     const psx_core_t *core;

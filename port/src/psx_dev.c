@@ -283,6 +283,7 @@ case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 
 void psx_dev_cd_attach(psx_dev_t *d, void *disc) { d->disc = disc; }
 static void gpu_gp0_fwd(void *g, uint32_t w) { psx_gpu_gp0((psx_gpu_t *)g, w); }
 static void gpu_gp1_fwd(void *g, uint32_t w) { psx_gpu_gp1((psx_gpu_t *)g, w); }
+uint32_t psx_dev_vframes_get(psx_dev_t *d) { return d->vframes; }
 void psx_dev_vframe(psx_dev_t *d)
 {
     if (!d) return;
@@ -569,7 +570,7 @@ int cmd_eng_selftest(int argc, char **argv)
     EMIT(V0 + 20, I_RT(0x0F, 0, 3, 0x1F80));           /* lui $3,0x1F80 */
     EMIT(V0 + 24, I_RT(0x0D, 0, 7, 0xFFFE));           /* ori $7,0xFFFE */
     EMIT(V0 + 28, I_RT(0x2B, 3, 7, 0x1070));           /* sw AND 清 bit0 */
-    EMIT(V0 + 32, 0x42000018u);                        /* eret */
+    EMIT(V0 + 32, 0x42000010u);                        /* rfe (task-153 R3000 正字: 中断出口 IE=旧EXL) */
     EMIT(V0 + 36, I_SPEC(0x00, 0, 0, 0, 0));           /* 槽 nop */
     psx_cpu_reset(&c, &core);
     dev.i_stat = 0x1220u; dev.istat_reads = 0u;   /* 楔8b-2: bit0 不在初值(EVTGEN 置位路径实走), bit3 不在初值(清位断言真验) */

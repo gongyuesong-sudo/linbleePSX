@@ -414,11 +414,22 @@ static uint32_t ha_96_remove(psx_hle_t *h, uint32_t cmd)
 static uint32_t hb_return_from_exc(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd;
-    if (h->cpu && (h->cpu->cop0[12] & 2u)) {     /* 仅异常态才弹帧; 非异常态=无操作
-        * (task-151 实证: 游戏泵在非例外上下文也调此 API, 盲 eret=重放 epc 残值连崩) */
-        h->cpu->cop0[12] &= ~2u;                 /* EXL=0 */
-        h->cpu->pc  = h->cpu->cop0[14] - 4u;     /* 回 epc */
-        h->cpu->npc = h->cpu->cop0[14];
+    psx_cpu_t *c = h->cpu;
+    if (c && c->ctx_saved && (c->cop0[12] & 2u)) {
+        /* RFE 派发中: 从上下文影子整帧恢复主线程 + rfe 正字(IE=旧EXL=0...
+         * 真机 BIOS 恢复的是主线程 status 原值 IE=1) */
+        c->ctx_saved = 0;
+        c->cop0[12] = c->saved_status;
+        c->cop0[14] = c->saved_epc; c->cop0[13] = c->saved_cause;
+        for (int r = 0; r < 32; r++) c->gpr[r] = c->saved_gpr[r];
+        c->pc = c->saved_pc; c->npc = c->saved_npc;
+        c->branch_pending = 0;
+        V0(0u); return 0;
+    }
+    if (c && (c->cop0[12] & 2u)) {               /* 异常态但无影子帧: 弹 epc(保守) */
+        c->cop0[12] &= ~2u;
+        c->pc  = c->cop0[14] - 4u;
+        c->npc = c->cop0[14];
     }
     V0(0u); return 0;
 }
@@ -536,12 +547,16 @@ static int g_hle_depth; /* 重入护栏 (handler→guest 回调→rootcall) */
 unsigned long hle_dbg_calls, hle_dbg_reject, hle_dbg_maxdepth;   /* task-141 观测 */
 unsigned hle_dbg_cw;
 /* task-151: served 画像(RCHIST=1) — 真实派发点后调用 */
+uint32_t g_hh_s[4096], g_hh_c[4096];
 static void hle_rchist(uint32_t vec, uint32_t cmd)
 {
-    static uint32_t hh_s[4096], hh_c[4096], hh_t;
+    uint32_t *hh_s = g_hh_s, *hh_c = g_hh_c;
+    static uint32_t hh_t;
     uint32_t key = ((vec & 0xFFu) << 8) | (cmd & 0xFFu);
     uint32_t ix = ((key * 2654435761u) >> 20) & 4095u;
     while (hh_s[ix] && hh_s[ix] != key) ix = (ix + 1) & 4095u;
+    if (!getenv("RCHIST")) return;               /* task-153 性能钉: getenv 绝不可
+        * 落在每步热路(曾 20 万次/步拖慢 10x 污染三盘对照) */
     hh_s[ix] = key; hh_c[ix]++;
     if (++hh_t % 2000000u == 0u) {
         printf("RCHIST @%u:\n", hh_t);
@@ -639,6 +654,33 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
                if (h->unk[z].key == (h->last_vec << 8 | cmd)) { h->unk[z].cnt++; break; }
                if (h->unk[z].cnt == 0) { h->unk[z].key = h->last_vec << 8 | cmd; h->unk[z].cnt = 1; break; }
            } }
+    /* task-153 战役级翻案: 本盘主线程全程 IE=0 (IRQT 实证) —— LIBSN 世代真机
+     * BIOS 在每次 rootcall 陷入时机服务设备链(3-19 内核), 不靠硬件中断到达。
+     * 派发 = rootcall 处理完后, 若 vframe 有未服务 tick → 存帧(此刻正处主线程
+     * 上下文!) → 跳派发器(v0=1) → 泵内 B0:17 从影子帧恢复回 rootcall 续途。 */
+    { psx_cpu_t *cc = h->cpu;
+      extern unsigned g_irqdbg;
+      if (h->dev && cc && !cc->ctx_saved && cc->entry_hook) {
+          uint32_t vf = psx_dev_vframes_get((psx_dev_t *)h->dev);
+          if (vf != h->last_pump_vf) {
+              h->last_pump_vf = vf;
+              uint32_t hw; void *ph = psx_translate(h->core, cc->entry_hook & ~3u, &hw);
+              uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
+              uint32_t target = raw & ~1u;
+              if (raw && target >= 0x80000000u && target < 0x80200000u) {
+                  cc->ctx_saved = 1;
+                  cc->saved_pc = cc->pc; cc->saved_npc = cc->npc;
+                  cc->saved_status = cc->cop0[12]; cc->saved_epc = cc->cop0[14]; cc->saved_cause = cc->cop0[13];
+                  for (int r = 0; r < 32; r++) cc->saved_gpr[r] = cc->gpr[r];
+                  cc->cop0[12] = (cc->cop0[12] & ~3u) | 2u;
+                  cc->branch_pending = 0;
+                  cc->gpr[2] = 1u;
+                  cc->gpr[31] = 0x800001A8u;
+                  cc->pc = target - 4u; cc->npc = target;
+                  if (g_irqdbg > 1u) printf("RCDBG->RFE@rc vf=%u target=%08x\n", vf, target);
+              }
+          }
+      } }
     g_hle_depth--;
     return 1;
 }
@@ -683,6 +725,7 @@ int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
     /* 真机 boot 完成态: BIOS 经 eret 进 EXE 时 status.IE=1 EXL=0(游戏以此为前提
      * 开 vsync 中断等待; task-144 RETAIL_IRQT 实证 mask=0x000D 但 IE=0 死等) */
     c->cop0[12] = (c->cop0[12] & ~2u) | 1u;       /* IE=1, EXL=0 */
+    { extern unsigned g_irqdbg; const char *eb = getenv("RETAIL_IRQDBG"); if (eb) g_irqdbg = (unsigned)atoi(eb); }
     c->gpr[31] = HLE_HALT_GPA;                    /* main 返回=halt 环 */
     /* halt 环: j self; nop */
     hle_wr32(h, HLE_HALT_GPA,      (0x02u << 26) | ((HLE_HALT_GPA >> 2) & 0x03FFFFFFu));
@@ -1289,7 +1332,13 @@ int cmd_retail_probe(int argc, char **argv)
                  (unsigned long long)dev.timer_last_sync[t]); }
     printf("RETAIL_PROBE gpu vframes=%u gp_ticks=%u gp0=%u gp1=%u fill=%u xfer=%u tri=%u spr=%u\n",
            dev.vframes, gpu.frames, gpu.gp0_words, gpu.gp1_words, gpu.fill_px, gpu.xfer_px, gpu.tri_px, gpu.spr_px);
-    for (int z = 0; z < 48; z++) if (h.unk[z].cnt)
+        if (getenv("RCHIST")) {
+        extern uint32_t g_hh_s[4096], g_hh_c[4096];
+        printf("RCEND served-profile:\n");
+        for (int z = 0; z < 4096; z++)
+            if (g_hh_c[z]) printf("  RC vec=%02x cmd=%02x n=%u\n", g_hh_s[z] >> 8, g_hh_s[z] & 0xFF, g_hh_c[z]);
+    }
+for (int z = 0; z < 48; z++) if (h.unk[z].cnt)
         printf("UNK vec=%02x cmd=%02x n=%u\n", h.unk[z].key >> 8, h.unk[z].key & 0xFF, h.unk[z].cnt);
     psx_disc_close(&d); psx_core_free(&core);
     return 0;

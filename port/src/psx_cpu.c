@@ -21,7 +21,7 @@ static void enter_exception(psx_cpu_t *c, uint32_t excode, uint32_t badv, int ha
     c->cop0[14] = c->pc;                    /* epc */
     c->cop0[13] = excode << 2;              /* cause.ExCode */
     if (has_badv) c->cop0[8] = badv;        /* vaddr */
-    c->cop0[12] |= 2u;                      /* status.EXL=bit1 (楔5 真值修正: 楔3 误用 bit0=IE) */
+    c->cop0[12] = (c->cop0[12] & ~1u) | 2u;  /* R3000 正字: 异常入口 IE=0 EXL=1 (task-153) */
     c->branch_pending = 0;
     uint32_t vec = (c->cop0[12] & (1u << 22)) ? 0xBFC00000u : 0x80000080u;
     c->pc  = vec - 4;
@@ -101,6 +101,7 @@ static int st_val(psx_cpu_t *c, uint32_t gpa, int sz, uint32_t val)
 
 /* 楔5: 中断自动进入链。step 头检查(报告点=下条未执行指令, eret 后重执行它);
  * 条件: status.IE(bit0) && !EXL(bit1) && (I_STAT & I_MASK & 13 源位) */
+unsigned g_irqdbg = 0;
 static int irq_check(psx_cpu_t *c)
 {
     psx_dev_t *d = (psx_dev_t *)c->core->dev;
@@ -108,7 +109,9 @@ static int irq_check(psx_cpu_t *c)
     uint32_t st = c->cop0[12];
     if (!(st & 1u) || (st & 2u)) return 0;
     if (!(d->i_stat & d->i_mask & 0x3FFFu)) return 0;   /* 0-9 KSEG 源 + 10-13 T0-T3 (task-135: 0x1FFF 漏 T3 位) */
+    if (g_irqdbg) { static unsigned q=0; if (q++<4u) printf("IRQCHK st=%08x stat=%04x mask=%04x\n", c->cop0[12], d->i_stat, d->i_mask); }
     uint32_t active = d->i_stat & d->i_mask & 0x3FFFu;
+
     /* task-150 中断派发三级分派 (真机 R3000: 中断向量=0x80000180, 非 0x80000000;
      * 旧跳 0x80000000 nop 海 = EXL 卡死 + ra 被 vector 页 jr $ra 毁伤) */
     uint32_t dispw = 0;
@@ -117,21 +120,49 @@ static int irq_check(psx_cpu_t *c)
         if (p10) dispw = *(const uint32_t *)p10;         /* 游戏自装 RFE 向量 */
     }
     if (!dispw && c->entry_hook) {
-        /* task-151 终钉字: HookEntryInt 入参 = jmp_buf 保存帧基址(帧首=被保存的
-         * ra, 可含标记位), 绝非函数 —— 跳帧首 = 跳进调用者返回点(三國志2 实证
-         * IP8 风暴 75K)。降级回诚实置位: 中断到达 → [槽]|=1, 游戏自取。
-         * 真 BIOS 派发(存帧→设备链→B0:17 恢复帧)= 楔14。 */
+        /* BIOS RFE 派发 (task-153 终模型, 真盘三重点钉字):
+         * [HookEntryInt 槽] = LIBSN 派发器恢复地址 +1 标记 (0x80051E11:
+         *   E10 函数 = SetEntryjmpBuf 返回点, v0==0 走首进分支 / v0!=0 走恢复泵分支)。
+         * 真机流程: BIOS 中断服务 → 存主线程全量上下文 → 调派发器(v0=1 resume)
+         * → 派发器跑设备链 → B0:17 ReturnFromException 从帧恢复 → rfe 回主线。
+         * 旧三错: 未掩 LSB(奇址乱码)/未置 v0(走错分支)/未存帧(jr $ra 毁主线)。 */
+        static int rfe_hw = -1;
+        if (rfe_hw < 0) rfe_hw = getenv("RETAIL_RFE") ? 1 : 0;   /* 三國志2 帧首误跳风暴 → 门控 */
         uint32_t hw; void *ph = psx_translate(c->core, c->entry_hook & ~3u, &hw);
-        if (ph) *(uint32_t *)ph |= 1u;
+        uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
+        uint32_t target = raw & ~1u;
+        if (rfe_hw && raw && target >= 0x80000000u && target < 0x80200000u && !c->ctx_saved) {
+            c->ctx_saved = 1;
+            c->saved_pc = c->pc; c->saved_npc = c->npc;
+            c->saved_status = c->cop0[12]; c->saved_epc = c->cop0[14]; c->saved_cause = c->cop0[13];
+            for (int r = 0; r < 32; r++) c->saved_gpr[r] = c->gpr[r];
+            c->cop0[14] = c->npc; c->cop0[13] = (1u << 8);
+            c->cop0[12] = (c->cop0[12] & ~3u) | 2u;      /* IE=0(派发中原子) EXL=1 */
+            c->branch_pending = 0;
+            c->gpr[2] = 1u;                               /* v0=1: resume 分支正字 */
+            c->gpr[31] = 0x800001A8u;                     /* rfe 蹦床兜底 */
+            c->pc = target - 4u; c->npc = target; c->exc_n++;
+            if (g_irqdbg) printf("IRQDBG->RFE %08x (raw=%08x v0=1 帧已存)\n", target, raw);
+            return 1;
+        }
+        if (raw && target >= 0x80000000u && target < 0x80200000u && c->ctx_saved) {
+            if (g_irqdbg) printf("IRQDBG->REENT skip\n");
+            return 0;
+        }
+        if (ph && raw) *(uint32_t *)ph |= 1u;
         d->i_stat &= ~active;
+        if (g_irqdbg) printf("IRQDBG->WORDSET [%08x]=%08x\n", c->entry_hook, raw);
         return 0;
-    }    if (dispw) {   /* 游戏自装 RFE dispatcher: 目标=向量地址本身(handler 首指令), 非其内容 */
-        c->cop0[14] = c->npc; c->cop0[13] = (1u << 8); c->cop0[12] |= 2u;
+    }
+    if (dispw) {   /* 游戏自装 RFE dispatcher(向量 80000180 非 0): 转发首指令 (task-150 正字) */
+        c->cop0[14] = c->npc; c->cop0[13] = (1u << 8); c->cop0[12] = (c->cop0[12] & ~3u) | 2u;
         c->branch_pending = 0;
         c->pc = 0x80000180u - 4u; c->npc = 0x80000180u; c->exc_n++;
+        if (g_irqdbg) printf("IRQDBG->DISPATCHER180\n");
         return 1;
     }
     d->i_stat &= ~active;   /* 无派发面: 诚实吞源防 livelock (真机会重入 nop 海=更糟) */
+    if (g_irqdbg) printf("IRQDBG->SWALLOW %04x\n", active);
     return 0;
 }
 
@@ -262,8 +293,15 @@ int psx_cpu_step(psx_cpu_t *c)
     case 0x0F: SETG(rt, im << 16); break;
     case 0x10: /* COP0 */
         if (rs == 0x10) {                     /* CO special: eret=funct 0x18 */
-            if (f == 0x18 || f == 0x10) { /* eret(0x18)/rfe(0x10, PSX rootcall 返回同义) */
+            if (f == 0x18) {              /* eret: 回 epc, EXL=0 (IE 不变) */
                 c->cop0[12] &= ~2u;
+                c->pc  = c->cop0[14] - 4;
+                c->npc = c->cop0[14];
+                c->cycles++; return 0; }
+            if (f == 0x10) {              /* rfe (R3000 正字, task-153): IE=旧EXL, EXL=0, ERL=1 */
+                uint32_t st0 = c->cop0[12];
+                uint32_t ie0 = (st0 >> 1) & 1u;
+                c->cop0[12] = (st0 & ~0x13u) | (ie0 << 0) | 4u;
                 c->pc  = c->cop0[14] - 4;
                 c->npc = c->cop0[14];
                 c->cycles++; return 0; }
