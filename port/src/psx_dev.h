@@ -55,6 +55,7 @@ typedef struct psx_dev_s {
     void    *gpu;               /* 清洁房楔5: psx_gpu_t* (GP0/GP1 口转发, NULL=观测面) */
     /* GPU (docs/39 端口族): GP0 FIFO 深 4 */
     uint32_t gp0_fifo[4];
+    uint32_t gpu_port;      /* GPU 数据端口字节累积窗 (task-151) */
     int      gp0_wp, gp0_rp, gp0_n;
     uint32_t gp1_last;
     /* rootcall 观测 (docs/41 契约) */

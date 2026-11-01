@@ -177,3 +177,22 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - **下楔候选**: ①3-19 内核(class,id,ccb)派发模型的公开源(OpenBIOS r3000 dispatcher
   / PsyQ LIBSN 反汇编文档)再攻邮箱; ②转攻三国志2 路线(零异常最深, 可能先到首帧);
   ③NBA Live rootcall 面横向补服务。
+
+## SESSION-151 追加 (楔 13 — GPU 字节端口面破邮箱 + HookEntryInt=jmp_buf 终钉字)
+- **设备真身=LIBSN 96.gp**: 设备指针槽 [0x80074FF4..5008] = 1F801800/1803/1020/1801/1802/1C00
+  (GPU 数据端口/就绪字节/GPU STAT/DMA base)。主线程死环 = `sb 1,[1800]; sb 7,[1803];
+  sb 7,[1802]`(OTG 输出) 后轮询 `[1803]&7==0` —— 影子页把 0x1803 变死字节。**GPU 端口
+  字节别名+size 判别+就绪读回 0** 三面齐 → **北斗神拳 600M 首次离开邮箱区, pc 深入
+  0x80060554→0x8003F3CC 新领地, exc=1**。
+- **HookEntryInt 终钉字**: 入参 = **jmp_buf 保存帧基址**(帧首=被保存 ra 可含标记位,
+  如 80051E11), 绝非函数 —— 跳帧首 = 三國志2 IP8 风暴 75K 回归实证, 已撤跳路。
+  游戏侧 SetEntryjmpBuf/GetEntryjmpBuf/ReturnFromException = setjmp/longjmp 上下文帧
+  (sw ra,gp,sp,fp,s0-s7 布局已反汇编钉字 @80052324/80052360)。
+- **真 BIOS 中断模型(楔 14 目标)**: IP8 到达 → setjmp 存主线程帧到 jmp_buf →
+  跑 C0:0A 注册的设备回调链 → B0:17 ReturnFromException = 从帧恢复 + rfe。
+  派发目标 = AddCblk class/id/ccb 链语义(公开源待钉), 非 hook 词本身。
+- `_96_remove [S+Psy-Q Fall96 seminar]` = 移除 ISO9660; HLE 恒成功返 1; no-op 返 0
+  曾致泵 2M 次/秒空转(served 画像 RCHIST 定位)。
+- 教训入钉: 中断派发目标与保存帧严格区分——任何"看起来像指针的 BIOS 注册参数"
+  先验证 (对齐 &3==0 + 落在 .text 观测范围 + 多盘交叉) 才可作为跳靶。
+- **回归**: 八面 114P/0F; 三盘 300M: 北斗 pc 新领地 exc=1 / 三国志2 exc=0 / NBA exc=0。

@@ -99,11 +99,16 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
         return d->timer_ctrl[(off - 0x1104) / 0x10];
     case 0x1108: case 0x1118: case 0x1128: case 0x1138:
         return d->timer_target[(off - 0x1108) / 0x10];
+    case 0x1801: case 0x1802: case 0x1803:   /* LIBSN 设备握手轮询面: 同步 GPU 即时消费 → 0 */
     case 0x1800: case 0x1810: case 0x1808:
         return 0u;   /* GPUREAD 正字(no$psx 1F801800/1810/1808 读=GPU 读响应 FIFO):
                       * v1 无 GpuRead 响应建模 → 恒 0; 绝不动命令 FIFO (task-141 正字:
                       * 旧 pop 模型会把游戏 GP0 命令流吞掉) */
-    case 0x1804: return d->gp1_last;   /* 兼容旧自造面 */
+    case 0x1804: /* GPU 数据端口 word + 就绪字节 (task-151 真盘设备钉字:
+                  * LIBSN sb 7,[0x1803] 写 OTG, 轮询 [0x1800]&7==0 / [0x1804] 面;
+                  * no$psx GPUSTAT byte1 = ready(0=busy)。字节读由 word 折叠:
+                  * 0x1800/0x1804 共享同一 4B 窗 -> 统一返回 ready 字。 */
+        return d->gp1_last;
     case 0x1814: return (d->gp0_n < 4 ? (1u << 24) : 0u) | (1u<<26) | (1u<<28) | (1u<<12);
                                 /* GPUSTAT 正字(no$psx 1F801814 读): bit24 ready-cmd, bit26 ready-VRAM,
                                  * bit28 ready-DMA-block, bit12 DMA active=0 面; 同步光栅器恒就绪 */
@@ -123,7 +128,6 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
 
 void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
 {
-    (void)size;
     if (off / 4 < MH) g_wr[off / 4]++;
     switch (off) {
     case 0x1070: d->i_stat &= val; break;              /* docs/57 写 AND 清 */
@@ -156,10 +160,29 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
         d->timer_target[(off - 0x1108) / 0x10] = val; break;
     case 0x1100: case 0x1110: case 0x1120: case 0x1130:
         d->timer_cnt[(off - 0x1100) / 0x10] = val & 0xFFFFu; break;
-    case 0x1810: case 0x1800:                            /* GP0 push (no$psx 正字 1F801810; 0x1800=旧自造兼容) 深 4 满丢弃 */
-        if (d->gp0_n < 4) { d->gp0_fifo[d->gp0_wp] = val;
-                            d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
-        if (d->gpu) gpu_gp0_fwd(d->gpu, val);            /* 楔5: 消费者转发 */
+case 0x1810: case 0x1800: case 0x1808:                 /* GP0 字推送 (no$psx 正字 1F801810;
+        * 0x1800/0x1808=旧自造兼容) 深 4 满丢弃 */
+        if (size >= 4) {                                /* 字推送 = 入队+转发 */
+            if (d->gp0_n < 4) d->gp0_fifo[d->gp0_n++] = val;
+            d->gpu_port = val;
+            if (d->gpu) gpu_gp0_fwd(d->gpu, val);
+        } else if (size == 2) {                          /* 半字 = 窗口 LSB 半累积(outb 面) */
+            d->gpu_port = (d->gpu_port & 0xFFFF0000u) | (val & 0xFFFFu);
+        } else {
+            d->gpu_port = (d->gpu_port & 0xFFFFFF00u) | (val & 0xFFu);
+        }
+        break;
+    case 0x1801: case 0x1802: case 0x1803:              /* GPU 数据端口字节别名 (task-151
+        * 真盘 LIBSN 96.gp 设备钉字: sb 命令字节/OTG 7 → 0x1800-0x1803,
+        * 影子页把 [0x1803] 卡成死 7 = 握手轮询永候)。字节累积成字,
+        * MSB(0x1803) 写落 = 命令字齐 → 入 GP0 FIFO 并即时消费(同步 GPU)。 */
+        d->gpu_port = (off == 0x1801u) ? ((d->gpu_port & 0xFF00FFFFu) | (val << 16))
+                      : (off == 0x1802u) ? ((d->gpu_port & 0xFFFF00FFu) | (val << 8))
+                      : ((d->gpu_port & 0x00FFFFFFu) | (val << 24));
+        if (off == 0x1803u) {
+            if (d->gp0_n < 4) d->gp0_fifo[d->gp0_n++] = d->gpu_port;
+            if (d->gpu) gpu_gp0_fwd(d->gpu, d->gpu_port);
+        }
         break;    case 0x1814: case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;  /* GP1 正字 1F801814 */
     /* SPU 控制面 (task-148 定案): 0x1C00-0x1DFF 区不做专案, 全落 64KB 影子回读面
      * ——真机 SPU 控制字可读回, 游戏做 lhu/ori/sh RMW 握手(北斗神拳 80058b94 实证:

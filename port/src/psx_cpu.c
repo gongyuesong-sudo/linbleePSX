@@ -115,14 +115,15 @@ static int irq_check(psx_cpu_t *c)
         if (p10) dispw = *(const uint32_t *)p10;         /* 游戏自装 RFE 向量 */
     }
     if (!dispw && c->entry_hook) {
-        /* HookEntryInt 词置位派发 (task-150 证伪跳调用后): 中断到达 → [hookword]|=1,
-         * 游戏轮询侧自取; 不跳不明代码。 */
+        /* task-151 终钉字: HookEntryInt 入参 = jmp_buf 保存帧基址(帧首=被保存的
+         * ra, 可含标记位), 绝非函数 —— 跳帧首 = 跳进调用者返回点(三國志2 实证
+         * IP8 风暴 75K)。降级回诚实置位: 中断到达 → [槽]|=1, 游戏自取。
+         * 真 BIOS 派发(存帧→设备链→B0:17 恢复帧)= 楔14。 */
         uint32_t hw; void *ph = psx_translate(c->core, c->entry_hook & ~3u, &hw);
         if (ph) *(uint32_t *)ph |= 1u;
-        d->i_stat &= ~active;      /* 已投递 = 吞源(游戏 ack 走 I_STAT AND 清正字) */
+        d->i_stat &= ~active;
         return 0;
-    }
-    if (dispw) {   /* 游戏自装 RFE dispatcher: 目标=向量地址本身(handler 首指令), 非其内容 */
+    }    if (dispw) {   /* 游戏自装 RFE dispatcher: 目标=向量地址本身(handler 首指令), 非其内容 */
         c->cop0[14] = c->npc; c->cop0[13] = (1u << 8); c->cop0[12] |= 2u;
         c->branch_pending = 0;
         c->pc = 0x80000180u - 4u; c->npc = 0x80000180u; c->exc_n++;

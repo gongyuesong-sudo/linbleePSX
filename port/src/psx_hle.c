@@ -400,6 +400,29 @@ static uint32_t hc_install_exc(psx_hle_t *h, uint32_t cmd)
 /* C(0x0A) AddCblk [S drivers.s]: 注册 (class,id)→func 设备回调。真机由 BIOS 60Hz
  * VBlank 事件环逐个调用; 北斗神拳驱动主循环写设备状态 7 后轮询状态等派发清位
  * (80051328 死环实证, task-149) → psx_hle_vblank_fire 每 VBlank 真调。 */
+/* B(0x17) ReturnFromException [S sys.s]: 真机 BIOS = 弹帧 jr $ra(=eret 同义)。
+ * HLE 派发用 ra=0x800001A8 rfe 蹦床, 游戏泵尾调此 API → 落蹦床自然 rfe 回主线。 */
+/* A(0x72) _96_remove [S drivers.s + Psy-Q Fall'96 seminar 公开文档: "Removes ISO 9660
+ * file system"]: 真机拆掉 96.c ISO9660 设备, 成功返回非 0(游戏泵 bnez 出环+清缓冲)。
+ * HLE 从不建 96.c 文件系统 = 移除恒成功。此前 no-op 返 0 → 泵 2M 次/秒空转饿死主线程。 */
+static uint32_t ha_96_remove(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    V0(1u); return 0;   /* 恒"已移除" */
+}
+
+static uint32_t hb_return_from_exc(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd;
+    if (h->cpu && (h->cpu->cop0[12] & 2u)) {     /* 仅异常态才弹帧; 非异常态=无操作
+        * (task-151 实证: 游戏泵在非例外上下文也调此 API, 盲 eret=重放 epc 残值连崩) */
+        h->cpu->cop0[12] &= ~2u;                 /* EXL=0 */
+        h->cpu->pc  = h->cpu->cop0[14] - 4u;     /* 回 epc */
+        h->cpu->npc = h->cpu->cop0[14];
+    }
+    V0(0u); return 0;
+}
+
 static uint32_t hc_add_cblk(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd;
@@ -459,7 +482,10 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->a[0x28] = ha_loadimage; h->a[0x29] = ha_execute; h->a[0x39] = ha_initheaps;
     h->a[0x3C] = ha_putchar;   h->a[0x3E] = ha_puts;    h->a[0x44] = ha_nosync_ok;
     h->a[0x49] = ha_gpu_cw;    /* [R] GPU_cw 命令词直通 (零售高频) */
-    h->a[0x70] = ha_nosync_ok; h->a[0x71] = ha_nosync_ok; h->a[0x72] = ha_nosync_ok;
+    h->a[0x70] = ha_nosync_ok; h->a[0x71] = ha_nosync_ok;
+    h->a[0x72] = ha_96_remove;   /* [S] _96_remove (task-151 转正) */
+    h->a[0x73] = ha_nosync_ok; h->a[0x74] = ha_nosync_ok; h->a[0x75] = ha_nosync_ok;
+    h->a[0x76] = ha_nosync_ok; h->a[0x77] = ha_nosync_ok; h->a[0x78] = ha_nosync_ok;
     h->a[0x99] = ha_nosync_ok; h->a[0x9C] = ha_setconf; h->a[0x9D] = ha_getconf;
     h->a[0x9F] = ha_nosync_ok; h->a[0xB4] = ha_nosync_ok;
     h->a[0x00] = ha_open; h->a[0x01] = ha_lseek; h->a[0x02] = ha_read;
@@ -473,6 +499,7 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->b[0x56] = hb_getc0;  h->b[0x57] = hb_getb0;
     h->b[0x5B] = hb_pad_clear;  /* [S] ChangeClearPAD */
     h->b[0x18] = hb_reset_entry;  /* [S] ResetEntryInt */
+    h->b[0x17] = hb_return_from_exc;  /* [S] ReturnFromException (task-151) */
     h->b[0x19] = hb_hook_entry;  /* [S] HookEntryInt (北斗神拳首 UNK 实证) */
     h->b[0x35] = hb_b35_policy;  /* 未定名假设面(低锚), 见上注 */
     h->a[0x13] = ha_bsetjmp;  h->a[0x14] = ha_blongjmp;  /* [S] sys.s */
@@ -508,6 +535,21 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
 static int g_hle_depth; /* 重入护栏 (handler→guest 回调→rootcall) */
 unsigned long hle_dbg_calls, hle_dbg_reject, hle_dbg_maxdepth;   /* task-141 观测 */
 unsigned hle_dbg_cw;
+/* task-151: served 画像(RCHIST=1) — 真实派发点后调用 */
+static void hle_rchist(uint32_t vec, uint32_t cmd)
+{
+    static uint32_t hh_s[4096], hh_c[4096], hh_t;
+    uint32_t key = ((vec & 0xFFu) << 8) | (cmd & 0xFFu);
+    uint32_t ix = ((key * 2654435761u) >> 20) & 4095u;
+    while (hh_s[ix] && hh_s[ix] != key) ix = (ix + 1) & 4095u;
+    hh_s[ix] = key; hh_c[ix]++;
+    if (++hh_t % 2000000u == 0u) {
+        printf("RCHIST @%u:\n", hh_t);
+        for (int z = 0; z < 4096; z++)
+            if (hh_c[z]) printf("  vec=%02x cmd=%02x n=%u\n", hh_s[z] >> 8, hh_c[z] ? hh_s[z] & 0xFF : 0, hh_c[z]);
+    }
+}
+
 int psx_hle_rootcall(psx_cpu_t *cpu)
 {
     psx_hle_t *h = (psx_hle_t *)cpu->hle;
@@ -545,7 +587,7 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
             else if (tab == 1u && id < HLE_B_SLOTS) sub = h->b[id];
             h->nlog++;
             g_hle_depth++;
-            if (sub) sub(h, id);
+            if (sub) { if (getenv("RCHIST")) hle_rchist(h->last_vec, id); sub(h, id); }
             else { V0((uint32_t)-1); h->unk_n++;
                    for (int z = 0; z < 48; z++) {
                        if (h->unk[z].key == (h->last_vec << 8 | id)) { h->unk[z].cnt++; break; }
@@ -590,7 +632,7 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
         g_hle_depth--; return 1;
     } else { g_hle_depth--; return 0; }          /* 非内核号 → 原异常路径 */
     h->last_cmd = cmd; h->nlog++;
-    if (fn) fn(h, cmd);
+    if (fn) { if (getenv("RCHIST")) hle_rchist(h->last_vec, cmd); fn(h, cmd); }
     else { V0(-1); h->last_unknown = (int)((h->last_vec << 8) | cmd);
            h->unk_n++;
            for (int z = 0; z < 48; z++) {
@@ -869,7 +911,8 @@ int cmd_hle_selftest(int argc, char **argv)
     hle_go(&c, 0xA0u, 0x71u, P); psx_cpu_run(&c, 3); uint32_t r2 = c.gpr[2];
     hle_go(&c, 0xA0u, 0x72u, P); psx_cpu_run(&c, 3); uint32_t r3 = c.gpr[2];
     hle_go(&c, 0xA0u, 0x44u, P); psx_cpu_run(&c, 3); uint32_t r4 = c.gpr[2];
-    HCHK(r1 == 0u && r2 == 0u && r3 == 0u && r4 == 0u && h.nlog == n0 + 4u, "v12_devboot_nosync");
+    /* task-151: 0x72=_96_remove 转正返 1(移除恒成功), 其余族仍 0 */
+    HCHK(r1 == 0u && r2 == 0u && r3 == 1u && r4 == 0u && h.nlog == n0 + 4u, "v12_devboot_nosync");
     /* V13 SetConf/GetConf 往返 */
     uint32_t cfg[4] = { 0x020C0000u, 0x80028000u, 0x800287C0u, 0x80028FC0u };
     for (int i = 0; i < 4; i++) EM(D + 0x1400u + 4u * (uint32_t)i, cfg[i]);
