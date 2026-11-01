@@ -3,9 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#ifndef GOLDEN_DIR
-#define GOLDEN_DIR "/home/gill/bleem/rewrite/decrypted"
-#endif
 int bleem_lz_decompress(const uint8_t*,uint32_t,uint32_t,uint8_t*,size_t,uint32_t*);
 static int one_stream(const uint8_t*img,uint32_t sb,const char*goldpath){
     FILE*f=fopen(goldpath,"rb"); if(!f){printf("SKIP %s (no golden)\n",goldpath);return 0;}
@@ -20,7 +17,7 @@ static int one_stream(const uint8_t*img,uint32_t sb,const char*goldpath){
     printf("stream %#x PASS: %ld bytes bit-exact\n",sb,n); return 0;
 }
 int main(void){
-    const char*exep=getenv("BLEEM_EXE"); FILE *f=fopen(exep?exep:"demo-v1_4.EXE","rb");
+    FILE *f=fopen("/home/gill/bleem/demo-v1_4.EXE","rb");
     if(!f){perror("exe");return 2;}
     fseek(f,0,SEEK_END); long fs=ftell(f); rewind(f);
     uint8_t *img=malloc(fs); if(fread(img,1,fs,f)!=fs) return 2; fclose(f);
@@ -31,8 +28,8 @@ int main(void){
     uint8_t *gold=malloc(gl); if(fread(gold,1,gl,f)!=gl) return 2; fclose(f);
 
     if(getenv("BLEEM_TRACE")){ /* engine-only trace below */ }
-    int r0=one_stream(img,0x0facc,GOLDEN_DIR "/stream_0facc_Lba3.bin");
-    int r1=one_stream(img,0x1015c,GOLDEN_DIR "/stream_1015c_L10e7.bin");
+    int r0=one_stream(img,0x0facc,"/home/gill/bleem/rewrite/decrypted/stream_0facc_Lba3.bin");
+    int r1=one_stream(img,0x1015c,"/home/gill/bleem/rewrite/decrypted/stream_1015c_L10e7.bin");
     static uint8_t out[0x80000];
     uint32_t L=0;
     extern int bleem_trace_on;

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # validate_host116.sh — ③战役楔2 反调试二墙分辨门(task-124, 2026-11-01)
 set -u
+export PATH="$PATH:/usr/lib/x86_64-linux-gnu/wine"  # SESSION-138: wineserver 不在 PATH 守卫自愈
 cd /home/gill/bleem/port
 fail=0; note(){ echo "HOST116: $*"; }
 rm -f build/bleem_port

@@ -28,7 +28,7 @@ export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/n
 if timeout 240 bash tools/final_check.sh 2>&1 | grep -q "FINAL CHECK PASS"; then note "E2) final_check PASS"; else note "E2) FAIL"; fail=1; fi
 cd /home/gill/bleem/rewrite
 grep -q "楔6d 真值" /home/gill/bleem/port/src/psx_core.c && { note "F1) FAIL alias 回滚残留"; fail=1; } || note "F1) alias 回滚干净"
-dd=$(ls docs/*.md | wc -l); grep -q "95_bios_marathon_w3" README.md && [ "$dd" -eq 100 ] && note "F2) docs=$dd+README" || { note "F2) FAIL docs=$dd"; fail=1; }
+dd=$(ls docs/*.md | wc -l); grep -q "95_bios_marathon_w3" README.md && [ "$dd" -eq 108 ] && note "F2) docs=$dd+README" || { note "F2) FAIL docs=$dd"; fail=1; }
 e=$(sha256sum /home/gill/bleem/demo-v1_4.EXE | cut -c1-8)
 g=$(sha256sum decrypted/stream_10a4c_L71cbf.bin | cut -c1-8)
 romgit=$(git ls-files | grep -icE "SCPH|psxbios|demo-v1_4|demo_patched|GOLDEN_RAM_2MB\.bin$" || true)

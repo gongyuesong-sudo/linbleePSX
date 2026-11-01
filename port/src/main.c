@@ -6,8 +6,14 @@
  *   bleem_port --selftest [--driver x11|wayland]  Vulkan 窗口自检 (task-003)
  *   bleem_port --render-ui <out.ppm>              UI 渲染输出 (task-004)
  *   bleem_port --payload-selftest <payload.bin>   格式引擎报告 (task-005)
+ *   bleem_port --psx-selftest                     PSX 薄引擎骨架自检 (task-106)
  */
 #include "bleem_native.h"
+int cmd_psx_selftest(int argc, char **argv);
+int cmd_cpu_selftest(int argc, char **argv);
+int cmd_dev_selftest(int argc, char **argv);
+int cmd_eng_selftest(int argc, char **argv);
+int cmd_bios_run(int argc, char **argv);
 #include <stdio.h>
 #include <string.h>
 
@@ -32,6 +38,11 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--render-ui") == 0)       return cmd_render_ui(argc, argv);
         else if (strcmp(argv[i], "--window") == 0)          return cmd_window(argc, argv);
         else if (strcmp(argv[i], "--payload-selftest") == 0) return cmd_payload_selftest(argc, argv);
+        else if (strcmp(argv[i], "--psx-selftest") == 0)          return cmd_psx_selftest(argc, argv);
+        else if (strcmp(argv[i], "--cpu-selftest") == 0)           return cmd_cpu_selftest(argc, argv);
+        else if (strcmp(argv[i], "--dev-selftest") == 0)           return cmd_dev_selftest(argc, argv);
+        else if (strcmp(argv[i], "--eng-selftest") == 0)           return cmd_eng_selftest(argc, argv);
+        else if (strncmp(argv[i], "--bios-run", 10) == 0)            return cmd_bios_run(argc, argv);
     }
 
     bleem_image_t img;

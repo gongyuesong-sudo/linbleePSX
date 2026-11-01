@@ -253,6 +253,13 @@ int vk_host_init(vk_host *h, int width, int height, const char *driver, const ch
     if (h->n_imgs > MAX_IMGS) h->n_imgs = MAX_IMGS;
     vkGetSwapchainImagesKHR(h->dev, h->sc, &h->n_imgs, h->imgs);
     for (uint32_t i = 0; i < h->n_imgs; i++) h->lays[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (getenv("VK_EVIDENCE")) {   /* task-056 M-3: 呈现链标记实证 */
+        VkPhysicalDeviceProperties pp; vkGetPhysicalDeviceProperties(h->pd, &pp);
+        fprintf(stderr, "VK_EV drv=%s device=%s swapchain_imgs=%u fmt=%u extent=%ux%u\n",
+                SDL_GetCurrentVideoDriver(), pp.deviceName, h->n_imgs, (unsigned)h->fmt,
+                (unsigned)sci.imageExtent.width, (unsigned)sci.imageExtent.height);
+        fflush(stderr);
+    }
 
     VkCommandPoolCreateInfo cpi = { .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = h->qfam };

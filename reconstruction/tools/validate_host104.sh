@@ -24,7 +24,7 @@ if timeout 300 bash /home/gill/bleem/rewrite/tools/validate_host103.sh 2>&1 | gr
 export DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
 if timeout 240 bash tools/final_check.sh 2>&1 | grep -q "FINAL CHECK PASS"; then note "E2) final_check 显示面 PASS"; else note "E2) FAIL"; fail=1; fi
 cd /home/gill/bleem/rewrite
-dd=$(ls docs/*.md | wc -l); grep -q "93_bios_marathon_w1" README.md && [ "$dd" -eq 100 ] && note "F) docs=$dd+README" || { note "F) FAIL docs=$dd"; fail=1; }
+dd=$(ls docs/*.md | wc -l); grep -q "93_bios_marathon_w1" README.md && [ "$dd" -eq 108 ] && note "F) docs=$dd+README" || { note "F) FAIL docs=$dd"; fail=1; }
 e=$(sha256sum /home/gill/bleem/demo-v1_4.EXE | cut -c1-8)
 g=$(sha256sum decrypted/stream_10a4c_L71cbf.bin | cut -c1-8)
 romgit=$(git ls-files | grep -icE "SCPH|psxbios|demo-v1_4|demo_patched" || true)

@@ -1,0 +1,96 @@
+// boot.c — authentic mini-PE loader for demo-v1_4.EXE on Linux (-m32)
+// Runs entry 0x401000 with shimmed Win32 imports; hooks module-exec calls to capture
+// stream pointers, relocations, and the delta/pointer-table truth. Never touches disk.
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <sys/mman.h>
+
+static uint8_t *BASE;      // image base 0x400000
+static uint8_t *FILEP;     // raw file
+static uint32_t FSIZE;
+
+typedef struct { const char *name; void *fn; } imp_t;
+
+// ---- shims (cdecl 32-bit) ----
+static uint32_t hits[64]; static const char *hitnames[64]; static int nhits;
+static void note(const char *n){ for(int i=0;i<nhits;i++) if(hitnames[i]==n){hits[i]++;return;} if(nhits<64){hitnames[nhits]=n;hits[nhits]=1;nhits++;} printf("[api] %s\n",n); }
+
+static int WINAPI_stub_GetVersionEx(void *osvi){
+    uint32_t *p = osvi; // major,minor,build,platform,csd at +4..+16
+    p[1]=4; p[2]=0; p[3]=0; p[4]=1; /* VER_PLATFORM_WIN32_WINDOWS */
+    return 1;
+}
+static uint32_t stub_GetModuleFileName(void *h, char *buf, uint32_t n){
+    const char *s="/home/gill/bleem/demo-v1_4.EXE";
+    strncpy(buf,s,n-1); return strlen(s);
+}
+static int32_t stub_CreateFile(const char*p,uint32_t a,uint32_t sh,void*s,uint32_t disp,uint32_t f,void*t){
+    note("CreateFileA"); int fd=open(p,0); return fd;
+}
+static uint32_t stub_VirtualAlloc(void*a,uint32_t sz,uint32_t t,uint32_t prot){
+    void *m=mmap(NULL,(sz+0xfff)&~0xfff,PROT_READ|PROT_WRITE|(prot&1?PROT_EXEC:0),MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    return (uint32_t)(uintptr_t)(m==MAP_FAILED?(void*)0xffffffff:m);
+}
+static uint32_t stub_VirtualProtect(void*a,uint32_t s,uint32_t np,uint32_t*old){ if(old)*old=4; note("VirtualProtect"); return 1; }
+static uint32_t stub_GetProcAddress(uint32_t m,const char*n){ note("GetProcAddress"); return (uint32_t)(uintptr_t)&stub_VirtualAlloc; }
+static uint32_t stub_LoadLibraryA(const char*n){ note("LoadLibraryA"); return 0x11000000; }
+static uint32_t stub_GetModuleHandleA(const char*n){ return n?0x11000000:0x400000; }
+static uint32_t stub_ExitProcess(uint32_t c){ printf("[boot] ExitProcess(%u)\n",c); fflush(stdout); _exit(0); }
+static int32_t stub_MessageBox(void*h,const char*t,const char*c,uint32_t u){
+    printf("[boot] MessageBox: [%s] %s\n", c?c:"?", t?t:"?"); fflush(stdout); _exit(0); return 2; }
+static void stub_MessageBeep(uint32_t x){ }
+static uint32_t stub_GlobalSize(uint32_t h){ return 0; }
+static uint32_t stub_GlobalLock(uint32_t h){ return 0; }
+static uint32_t stub_GlobalUnlock(uint32_t h){ return 0; }
+static uint32_t stub_GlobalFree(uint32_t h){ return 0; }
+static uint32_t stub_GetCommandLineA(void){ static char cl[]="demo-v1_4.EXE"; return (uint32_t)(uintptr_t)cl; }
+static uint32_t stub_GetTempPathA(uint32_t n,char*b){ if(n)b[0]=0; return 0; }
+static uint32_t stub_timeGetTime(void){ return 0; }
+
+static uint32_t stub_generic(void){ note("generic"); return 1; }
+
+static void *resolve(const char *name){
+    if(!strcmp(name,"GetVersionExA")) return stub_stub_GetVersionEx;
+    return stub_generic;
+}
+
+extern int _open(const char*,int,...);
+#define open _open
+
+int main(void){
+    FILE *f=fopen("/home/gill/bleem/demo-v1_4.EXE","rb");
+    fseek(f,0,SEEK_END); FSIZE=ftell(f); rewind(f);
+    FILEP=malloc(FSIZE); fread(FILEP,1,FSIZE,f); fclose(f);
+    // map whole file at 0x400000 RWX (sections overlap their raw twins; good enough: this exe maps file-as-view identity)
+    BASE=mmap((void*)0x400000,(FSIZE+0xffff)&~0xffff,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,-1,0);
+    if(BASE==MAP_FAILED){perror("base");return 1;}
+    memcpy(BASE,FILEP,FSIZE);
+    printf("[boot] image at %p size %u\n",(void*)BASE,FSIZE);
+    // IAT: .idata VA 0x402000.. ; scan TL: IMAGE_DIRECTORY_ENTRY_IMPORT at data dir [0x400078]
+    uint32_t dirrva=*(uint32_t*)(BASE+0x78), dirsz=*(uint32_t*)(BASE+0x7c);
+    printf("[boot] import dir rva=%#x size=%#x\n",dirrva,dirsz);
+    uint32_t *desc=(uint32_t*)(BASE+dirrva);
+    while(desc[0]){
+        const char *dll=(const char*)(BASE+desc[0]);
+        uint32_t *thunk=(uint32_t*)(BASE+(desc[3]?desc[3]:desc[2]));
+        uint32_t *iat=(uint32_t*)(BASE+desc[2]);
+        printf("[boot] dll %s\n",dll);
+        for(int i=0;thunk[i];i++){
+            if(thunk[i]&0x80000000){ iat[i]=(uint32_t)(uintptr_t)stub_generic; continue; }
+            const char *nm=(const char*)(BASE+thunk[i])+2;
+            void *fn=resolve(nm);
+            iat[i]=(uint32_t)(uintptr_t)fn;
+            if(i<200) {}
+        }
+        desc+=5;
+    }
+    fflush(stdout);
+    // call entry
+    uint32_t ep=*(uint32_t*)(BASE+0x28);
+    printf("[boot] entry %#x\n",ep); fflush(stdout);
+    ((void(*)(void))0;// placeholder
+    return 0;
+}

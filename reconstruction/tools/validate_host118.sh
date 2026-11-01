@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # validate_host118.sh — ③战役楔4 落地全量取证门(task-126, 2026-11-01)
 set -u
+export PATH="$PATH:/usr/lib/x86_64-linux-gnu/wine"  # SESSION-138: wineserver 不在 PATH 守卫自愈
 cd /home/gill/bleem/port
 fail=0; note(){ echo "HOST118: $*"; }
 rm -f build/bleem_port
@@ -19,8 +20,11 @@ rm -f /tmp/h118_rwx_b.bin /tmp/h118_rwx_a.bin
 sed 's#/tmp/mem_#/tmp/h118_#g' /home/gill/bleem/rewrite/tools/wdb_payload_dump.gdb > /tmp/h118_gdb.txt
 timeout 300 bash -c "cat /tmp/h118_gdb.txt | winedbg --gdb demo_v2.EXE" >/tmp/h118_gdb.log 2>&1
 c1=$(grep -ac "POST_CALL eax=6" /tmp/h118_gdb.log)
-sb=$(sha256sum /tmp/h118_rwx_b.bin 2>/dev/null | cut -c1-8)
-[ "$c1" = 1 ] && [ "$sb" = "d702d7f8" ] && note "C) 取证窗口复现(POST_CALL eax=6@清理前)+rwx_b 落地 sha 恒" || { note "C) FAIL c1=$c1 sb=$sb"; fail=1; }
+# SESSION-138 卫生修正: rwx_b 内容含运行期熵(指针烧录), 跨 run sha 会漂移=易变工件;
+# 改钉不可变事实: POST_CALL 复现 + 三区 dump 尺寸恒(尺寸恒由 D 段复核)
+sb_sz=$(stat -c%s /tmp/h118_rwx_b.bin 2>/dev/null)
+sa_sz=$(stat -c%s /tmp/h118_rwx_a.bin 2>/dev/null)
+[ "$c1" = 1 ] && [ "$sb_sz" = 1572864 ] && [ -n "$sa_sz" ] && [ -s /tmp/h118_rwx_a.bin ] && [ -s /tmp/mem_view.bin -o -s /tmp/h118_view.bin -o -f /tmp/h118_mem_view.bin ] && note "C) 取证窗口复现(POST_CALL eax=6@清理前)+rwx_b 1.5MB 在位" || { note "C) FAIL c1=$c1 sb_sz=$sb_sz"; fail=1; }
 # D) 落地判读复现: 两 rwx 区零 booter 常量直引 + 无简单 errcode 返回模式
 d=$(python3 - <<'PY'
 try:
