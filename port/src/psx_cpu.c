@@ -16,8 +16,15 @@ static uint64_t psx_cpu_sysclk(void) { return g_psx_cpu_sysclk; }
 
 #define SIGN16(x) ((uint32_t)(int32_t)(int16_t)(x))
 
+uint32_t g_last_syscall_pc = 0;   /* task-155: 最近一次 syscall/break 现场 */
+extern unsigned g_irqdbg;
 static void enter_exception(psx_cpu_t *c, uint32_t excode, uint32_t badv, int has_badv)
 {
+    if (g_irqdbg >= 3u && excode == 8u) {
+        static unsigned s1 = 0;
+        if (s1 < 5u) { s1++; printf("EIGHT epc=%08x npc=%08x ra=%08x code=%08x t1=%08x t2=%08x v0=%08x\n",
+                     c->pc, c->npc, c->gpr[31], c->syscall_code, c->gpr[9], c->gpr[10], c->gpr[2]); }
+    }
     c->cop0[14] = c->pc;                    /* epc */
     c->cop0[13] = excode << 2;              /* cause.ExCode */
     if (has_badv) c->cop0[8] = badv;        /* vaddr */
