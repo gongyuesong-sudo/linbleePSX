@@ -132,6 +132,11 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
     case 0x1825: return 0;                        /* CDSEL/CONFIG 回读 */
     case 0x1100: case 0x1110: case 0x1120: { /* Timer cnt (旧 0x10 步幅, 楔28 翻案恢复) */
         psx_dev_sync(d);
+        /* 楔29: 1F801120 = no$psx 公开 "Counter"(1/8MHz 自由运行, BIOS 常驻服务,
+         * 游戏复位后直读不等 enable)。SIO 引擎 66D4 快照/66F4 延时全用它
+         * (busy=0xFFFF 驻点根因)。T2 槽读回 free-running 值。 */
+        if (off == 0x1120 && psx_sysclk_provider)
+            return (uint32_t)((psx_sysclk_provider() / 8u) & 0xFFFFu);
         return d->timer_cnt[(off - 0x1100) / 0x10];
     }
     case 0x1104: case 0x1114: case 0x1124:
@@ -161,7 +166,19 @@ static uint32_t psx_dev_read_i(psx_dev_t *d, uint32_t off, int size)
     case 0x1044:
         /* 楔22 实验(门控): LIBSN SIO 引擎(0x8003F670) TX 泵等 1044 非零。
          * RETAIL_SIO1044=1 → 回 TX 计数影子(暂以 104A bit0 语义镜像=1)。 */
-        if (d->sio1044) return d->sio1044;
+        if (d->sio1044) {
+            /* 楔29: BIOS pad 服务正字=每 VBlank 自动轮询在位 pad, RX 保持满帧
+             * (8 字节应答; 游戏 65D70 等 rxcnt>=8)。计数低于 8 时按需补投。 */
+            if (d->sio_rxf < 8u) {
+                static const uint8_t reply[8] = {0x5A,0x5D,0x5C,0x5D,0xFF,0xFF,0xFF,0xFF};
+                for (int qi = 0; qi < 8; qi++)
+                    d->sio_rxq[(d->sio_rxq_rp + d->sio_rxf + qi) & 15u] = reply[qi];
+                d->sio_rxf = 8u;
+            }
+            /* 楔29b: bit1 = RX 传输请求(65D68 等待位)。真机随 104A 控制字位态走;
+             * 与游戏写 104A 的 bit 镜像联动(0x1F80104A 影子 bit1)。 */
+            return (1u | (1u << 9) | (1u << 1) | (d->sio_rxf << 3));  /* 楔29b: bit1=RX 就绪恒置(65D68 门) */
+        }
         return d->reg1044;
     case 0x1048: case 0x104C: return 0;
     case 0x104A: { /* 双相位握手: bit0→bit1 逐读推进 (docs/62 状态机化) */
@@ -552,9 +569,17 @@ int cmd_dev_selftest(int argc, char **argv)
     g_dev_fake_clk += 256u * 0x300u;                /* 越 target → 归零循环+IRQ */
     (void)psx_dev_read(&dev, 0x1120, 4);
     DCHK(dev.timer_cnt[2] < 0x0300u && (dev.i_stat & (1u<<12)) != 0u, "timer2_target_irq");
-    dev.timer_ctrl[2] = 0u; dev.timer_cnt[2] = 0x5555u;   /* disable 不走 */
-    DCHK(psx_dev_read(&dev, 0x1120, 4) == 0x5555u && dev.timer_cnt[2] == 0x5555u,
-         "timer2_disabled_frozen");
+    dev.timer_ctrl[2] = 0u; dev.timer_cnt[2] = 0x5555u;   /* disable 不走(T2 struct 面) */
+    {   /* 楔29 正字: 1F801120 = free-running Counter(1/8MHz, 不等 enable):
+         * 同刻双读相等 + 推钟必前进; T2 冻结语义改由 struct 面断言。 */
+        uint32_t c1 = psx_dev_read(&dev, 0x1120, 4);
+        uint32_t c2 = psx_dev_read(&dev, 0x1120, 4);
+        g_dev_fake_clk += 8000u;                          /* 1000 tick */
+        uint32_t c3 = psx_dev_read(&dev, 0x1120, 4);
+        DCHK(c1 == c2 && dev.timer_cnt[2] == 0x5555u &&
+             ((c3 - c1) & 0xFFFFu) >= 900u && ((c3 - c1) & 0xFFFFu) <= 1100u,
+             "counter_1120_free_running");
+    }
 
     DCHK(psx_dev_read(&dev, 0x1130, 4) == 0u, "ram_size_1130_reads_0_8mb");   /* task-158 楔19 */
     psx_dev_write(&dev, 0x1130, 0xBEEF2u, 4);

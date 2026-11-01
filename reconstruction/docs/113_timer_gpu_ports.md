@@ -482,3 +482,18 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   真编译后暴露 3 条误删(I_STAT EVTGEN case/g_rd 计数行), 补回后真全绿 118P/0F。
 - 回归(真新二进制): 八面 118P/0F; 北斗 100M served=172 exc=1; 三国志2 exc=0;
   打击者 exc=1; 窗口 frames=125 hw=1。
+
+## 楔29 (SESSION-168): **链火全链 done=1 首次达成** — SIO pad 引擎完全打通
+- 三连修复(全常开面):
+  1. **1F801120 = free-running Counter**(no$psx 公开义, 1/8MHz, BIOS 常驻不等 enable):
+     读回 `(sysclk/8)&0xFFFF`。66D4 快照/66F4 延时判定立即成立 → 线程 A 破 800655A0
+     环深进到 RX 等待体 80065D54。busy=0xFFFF 驻点根除。
+  2. **1044 RX 计数按需补投满帧**: 计数<8 时自动重排 8 字节 pad 应答
+     [5A 5D 5C 5D FF FF FF FF](BIOS pad 服务=每 VBlank 轮询在位 pad 的稳态等价)。
+  3. **1044 bit1 = RX 就绪恒置**(65D68 `andi 2` 等待门; 104A 影子联动版无效已迭代)。
+- 结果: RPFIRE **每轮 done=1**(PCB-A/PCB-B 均正常返回 trampoline) = 链火派发体
+  (pad polling/DMA 服务/延时等待)首次完整跑完。楔21-28 的"线程体永返/驻环"时代结束。
+- 未闭合(楔30): [800D43A8] vsync 计数器仍无递增者, gp0 仍 NOP 族 — pad 链≠vsync 链;
+  vsync 票需 VBlank 事件→游戏 vsync 回调(C2 表/enq 另一链号)路, AddVSyncCallback
+  登记面(A0:32/33 VSync/VSyncCallbacks)CALLTR 从未观测到调用 = 游戏可能用 b0 事件面。
+- 门控实验面(retail): RPBUDGET=100000 + RP/RFE/RFEALWAYS 组合下链火全通过。
