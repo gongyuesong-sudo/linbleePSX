@@ -683,8 +683,11 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   `jal 8003F3BC`(= `jal 80060548` 取 v0 + `sll v0,0xC` 段算 + `jal 80063D88`)
   等返 1 → `bnez` 不出 = 游戏**主画面装配等第一 DMA 队列**。
 - `80060548: lui v0,800d; lw v0,0x43a8(v0); jr $ra` —— 返回的正是楔30 钉死的
-  **DMA queue slot allocation counter [800D43A8]**（活体复测=0@20M）。
+  **DMA queue slot allocation counter [800D43A8]**——活体复测 **=4@20M(楔41 后
+  已动, 楔30 "恒 0" 结论过期)**: NewDmaQueue 已建 4 队! 本体仍等 `80063D88`
+  返 1(非等 [D43A8] 非零, 其值仅作 `sll 0xC` 段算输入)。
 - 链条闭环复活: 本体等队列 → 队列需 `NewDmaQueue 8006B27C`(前置 CB
   `[76CE4+ch*4]` 非空) → CB 注册在 CD 驱动 open/DMA 服务路径 = **楔43 主攻面**
-  (Dopen 预放页派发已通, 缺 CD 通道 CB 登记触发口钉字)。
+  (Dopen 预放页派发已通, 队列已建 4 个)。楔43 主攻改为钉 **80063D88 返值语义**
+  (本体等它 ==1; a1=拼合的 GP 显示状态字 0x2c8/0x300/0x2a6 族)。
 - 本楔纯取证; port 树=楔41 态(9bb6685); 回归八面未动(无编译改动)。
