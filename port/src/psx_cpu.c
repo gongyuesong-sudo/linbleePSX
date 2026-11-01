@@ -293,17 +293,24 @@ int psx_cpu_step(psx_cpu_t *c)
     case 0x0F: SETG(rt, im << 16); break;
     case 0x10: /* COP0 */
         if (rs == 0x10) {                     /* CO special: eret=funct 0x18 */
-            if (f == 0x18) {              /* eret: 回 epc, EXL=0 (IE 不变) */
-                c->cop0[12] &= ~2u;
-                c->pc  = c->cop0[14] - 4;
-                c->npc = c->cop0[14];
+            if (f == 0x18) {              /* eret: 回 epc, EXL=0 (IE 不变)
+                 * task-154 加固(EXL 正字): 非例外态 epca=陈旧值 → 跳栈风暴。
+                 * 诚实回退: 视为 nop 继续(npc 顺序)。 */
+                if (c->cop0[12] & 2u) {
+                    c->cop0[12] &= ~2u;
+                    c->pc  = c->cop0[14] - 4;
+                    c->npc = c->cop0[14];
+                }
                 c->cycles++; return 0; }
-            if (f == 0x10) {              /* rfe (R3000 正字, task-153): IE=旧EXL, EXL=0, ERL=1 */
+            if (f == 0x10) {              /* rfe (R3000 正字, task-153): IE=旧EXL, EXL=0, ERL=1
+                 * task-154 加固: 非例外态=陈旧 epca → nop 语义顺序续跑 */
                 uint32_t st0 = c->cop0[12];
-                uint32_t ie0 = (st0 >> 1) & 1u;
-                c->cop0[12] = (st0 & ~0x13u) | (ie0 << 0) | 4u;
-                c->pc  = c->cop0[14] - 4;
-                c->npc = c->cop0[14];
+                if (st0 & 2u) {
+                    uint32_t ie0 = (st0 >> 1) & 1u;
+                    c->cop0[12] = (st0 & ~0x13u) | (ie0 << 0) | 4u;
+                    c->pc  = c->cop0[14] - 4;
+                    c->npc = c->cop0[14];
+                }
                 c->cycles++; return 0; }
             enter_exception(c, 10u, 0, 0); c->cycles++; return 0;
         }

@@ -645,7 +645,19 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
         h->last_vec = 0u; h->last_cmd = 2u;
         cpu->cop0[12] |= 0x401u; cpu->gpr[2] = 0u; h->nlog++;
         g_hle_depth--; return 1;
-    } else { g_hle_depth--; return 0; }          /* 非内核号 → 原异常路径 */
+    } else { g_hle_depth--;
+        if (getenv("SYSTR")) {   /* task-154: 未服务 syscall 现场(每形态首见) = 弹栈风暴根因取证 */
+            static uint32_t sy_seen[1024]; static uint32_t sy_n;
+            uint32_t key = ((vec & 0xFFFu) << 12) | (cmd & 0xFFFu);
+            int known = 0;
+            for (uint32_t z = 0; z < sy_n && z < 1024u; z++) if (sy_seen[z] == key) { known = 1; break; }
+            if (!known && sy_n < 1024u) {
+                sy_seen[sy_n++] = key;
+                printf("SYSTR vec=%03x cmd=%03x code=%08x a0=%08x a1=%08x pc=%08x\n",
+                       vec, cmd, cpu->syscall_code, cpu->gpr[4], cpu->gpr[5], cpu->pc);
+            }
+        }
+        return 0; }          /* 非内核号 → 原异常路径 */
     h->last_cmd = cmd; h->nlog++;
     if (fn) { if (getenv("RCHIST")) hle_rchist(h->last_vec, cmd); fn(h, cmd); }
     else { V0(-1); h->last_unknown = (int)((h->last_vec << 8) | cmd);
@@ -1318,6 +1330,17 @@ int cmd_retail_probe(int argc, char **argv)
                         void *qd = psx_translate(&core, base + z, &www);
                         uint32_t vv = qd ? *(uint32_t*)qd : 0u; fwrite(&vv, 4, 1, df); }
                       fclose(df); printf("DUMPHOT %s base=%08x\n", fname, base); }
+        }
+    }
+    {   /* task-154: 出口 RAM 画像 (addr:len hex) — 钉跨时长演化的等待阈值 */
+        const char *md = getenv("RETAIL_MEMDUMP");
+        if (md) {
+            unsigned ma = 0, ml = 16u;
+            if (sscanf(md, "%x:%x", &ma, &ml) >= 1)
+                for (unsigned z = 0; z < ml; z += 4u) {
+                    unsigned mww; void *mp = psx_translate(&core, (ma + z) & ~3u, &mww);
+                    printf("MEMD [%08x]=%08x\n", ma + z, mp ? *(const uint32_t *)mp : 0xDEDu);
+                }
         }
     }
     { extern void gp0_trace_dump(void); gp0_trace_dump(); }

@@ -241,3 +241,23 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - **下楔**: ①北斗 rootcall 水位派发开启后泵仅 3 拍=泵内 B0:0A WaitEvent 语义要接
   事件票(VBlank fired 面已有, 但泵在等**设备**事件而非 vsync——按 dev/class 投递);
   ②三國志2/北斗 dispw-180 转发恢复后首次可跑通游戏自装 dispatcher, 复查 HOT。
+
+## SESSION-154 追加 (楔 16 — 主循环活性钉字 + eret/rfe 加固)
+- **RETAIL_MEMDUMP 出口 RAM 画像面**: 北斗神拳 `[0x800D2AD0]` 帧阈值 100M=0x3c1 →
+  600M=0x3c2、`[AD4]` 0x00168584→0x003C0002 跨时长**持续演化** = 主线程 pacing 循环
+  **活着**（每帧在推进），但 gp0/disp 面为 0 → **引擎从未到达渲染提交点**。
+  病灶从"死等"精化为"活着但到不了画"——卡在 pacing 与首帧提交之间的某资源门。
+- **eret/rfe EXL 正字加固**: 非例外态(EXL=0)执行 eret/rfe = 陈旧 epca 盲跳；
+  打击者1945 实证 `ra=800001A8 + epc=801FFFB0` 弹栈风暴自激(82K 次)。
+  现语义: EXL=0 时 eret/rfe 视作 nop 顺序续跑(诚实回退, 不伪造返回)。
+- **打击者1945 定性**(RCHIST+SYSTR): `A0:3F printf ×82419` = 游戏自身死锁报错环
+  (LIBSN "3-19"-型 fatal: 等待资源不可得→printf 循环)。SYSTR 零输出 = 全部
+  syscall 均有号可服务, 缺口在**资源到位**, 与北斗神拳泵等资源同一类病。
+  非楔 16 引入回归(SESSION-152 收账时该盘 1128912/风暴已如此)。
+- **SYSTR 面**: rootcall 未服务回退路径按 (vec,cmd) 形态首见打印(含 syscall code)。
+- **路线裁定**: 曾评估装公开 BIOS ROM 解 fatal —— **违反零版权纪律(用户硬约束
+  "不用任何 bios")且 .bios=SCPH 禁列, 即 OpenBIOS 亦 BIOS** → 放弃, 继续 HLE 正路。
+- **盘面**: 八面 115P/0F; 北斗 200M exc=1(活)/三國志2 exc=0/NBA exc=0 UNK=3; 基线不变。
+- **下楔**: 北斗"活着但不到渲染"精查——在 pacing 出口(jal 800519e4 返回后分支
+  800510c0)设写点/RWATCH, 钉帧循环后续路径停在哪一 gate; 该类 gate 常为
+  [80074xxx 设备块] 某字段 = 等待 CD 数据到位 → 复查 DMA3/CDINT 是否真被消费。
