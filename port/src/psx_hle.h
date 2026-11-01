@@ -42,6 +42,7 @@ typedef struct psx_hle {
     struct { uint32_t class, vector; int enabled, fired; } ev[HLE_EV_MAX];
     /* Execute(first) 武装态 (task-131 接线主循环) */
     uint32_t exe_pc, exe_gp, exe_sp; int armed;
+    void *disc;          /* psx_disc_t* (文件 API 消费; NULL=无盘) */
     /* CONFIG 镜像 (SetConf/GetConf) */
     uint32_t config[4];
     hle_a_fn a[HLE_A_SLOTS];

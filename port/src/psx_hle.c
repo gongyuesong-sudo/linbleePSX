@@ -9,6 +9,7 @@
  */
 #include "psx_hle.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- guest 访存小工 (fixed 态=恒等指针) ---------- */
@@ -131,6 +132,64 @@ static uint32_t ha_setconf(psx_hle_t *h, uint32_t cmd)
     h->config[2] = A_P(2); h->config[3] = A_P(3);
     V0(0); return 0;
 }
+/* ---- A 族文件 API (0x00 open/0x01 lseek/0x02 read/0x04 close/0x05 ioctl)
+ * fd 正字 = 0x1100|slot (PSX cdrom 设备通道, 公开 SDK 文献); 介质只读。 ---- */
+static int hle_wr8w(psx_hle_t *h, uint32_t gpa, uint8_t v)
+{ uint32_t w; void *p = psx_translate(h->core, gpa, &w); if (!p) return -1; *(uint8_t *)p = v; return 0; }
+#include "psx_cdrom.h"
+static int h_fd(psx_hle_t *h, uint32_t fd)
+{ (void)h; return (fd & 0xFF00u) == 0x1100u ? (int)(fd & 0xFFu) : -1; }
+static uint32_t ha_open(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; psx_disc_t *d = (psx_disc_t *)h->disc;
+    char path[128]; if (!d || hle_rdstr(h, A_P(0), path, (int)sizeof path) < 0) { V0(-1); return 0; }
+    char *base = path;   /* 取 ':' / '\' 后基名 */
+    for (char *q = path; *q; q++) if (*q == ':' || *q == '\\' || *q == '/') base = q + 1;
+    int fi = psx_disc_find(d, base);
+    if (fi < 0) { V0(-1); return 0; }
+    for (int i = 0; i < 8; i++) if (!d->fd[i].used) {
+        d->fd[i].used = 1; d->fd[i].fidx = fi; d->fd[i].pos = 0; V0(0x1100u | (uint32_t)i); return 0;
+    }
+    V0(-1); return 0;
+}
+static uint32_t ha_read(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; psx_disc_t *d = (psx_disc_t *)h->disc;
+    int s = h->disc ? h_fd(h, A_P(0)) : -1;
+    if (s < 0 || !d || !d->fd[s].used) { V0(-1); return 0; }
+    cd_file_t *f = &d->files[d->fd[s].fidx];
+    uint32_t pos = d->fd[s].pos, len = A_P(2);
+    if (pos >= f->size) { V0(0); return 0; }
+    if (len > f->size - pos) len = f->size - pos;
+    uint8_t sec[2048]; uint32_t done = 0;
+    while (done < len) {
+        uint32_t off = f->lba + pos / 2048u, in = pos % 2048u, take = 2048u - in;
+        if (take > len - done) take = len - done;
+        if (psx_disc_read(d, off, 1, sec) != 0) break;
+        int err = 0;
+        for (uint32_t i = 0; i < take; i++) if (hle_wr8w(h, A_P(1) + done + i, sec[in + i])) { err = 1; break; }
+        if (err) break;
+        done += take; pos += take;
+    }
+    d->fd[s].pos = pos; V0(done); return 0;
+}
+static uint32_t ha_lseek(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; psx_disc_t *d = (psx_disc_t *)h->disc;
+    int s = h->disc ? h_fd(h, A_P(0)) : -1;
+    if (s < 0) { V0(-1); return 0; }
+    cd_file_t *f = &d->files[d->fd[s].fidx];
+    uint32_t np = (A_P(2) == 1u) ? d->fd[s].pos + A_P(1) :
+                  (A_P(2) == 2u) ? f->size + A_P(1) : A_P(1);
+    d->fd[s].pos = np; V0(np); return 0;
+}
+static uint32_t ha_close(psx_hle_t *h, uint32_t cmd)
+{
+    (void)cmd; psx_disc_t *d = (psx_disc_t *)h->disc;
+    int s = h->disc ? h_fd(h, A_P(0)) : -1;
+    if (s < 0) { V0(-1); return 0; }
+    d->fd[s].used = 0; V0(0); return 0;
+}
 static uint32_t ha_getconf(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd; /* a0=目标 guest CONFIG* */
@@ -226,6 +285,8 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->a[0x70] = ha_nosync_ok; h->a[0x71] = ha_nosync_ok; h->a[0x72] = ha_nosync_ok;
     h->a[0x99] = ha_nosync_ok; h->a[0x9C] = ha_setconf; h->a[0x9D] = ha_getconf;
     h->a[0x9F] = ha_nosync_ok; h->a[0xB4] = ha_nosync_ok;
+    h->a[0x00] = ha_open; h->a[0x01] = ha_lseek; h->a[0x02] = ha_read;
+    h->a[0x04] = ha_close; h->a[0x05] = ha_nosync_ok;   /* ioctl no-op [S] */
     /* B [S/R] */
     h->b[0x00] = hb_alloc;  h->b[0x01] = hb_free;
     h->b[0x07] = hb_deliver_event; h->b[0x08] = hb_open_event; h->b[0x09] = hb_close_event;
@@ -434,6 +495,33 @@ int cmd_hle_selftest(int argc, char **argv)
     hle_go(&c, 0xA0u, 0x3Cu, P); psx_cpu_run(&c, 1);
     HCHK(c.exc_n == ex0 + 1u && c.cop0[13] == (8u << 2), "v15_uninstall_falls_back_to_exception");
 
+    /* V16 A 族文件 API: 自造盘 → open/read/lseek/close (fd=0x1100 正字) */
+    {
+        uint32_t n = 0xA00u; uint8_t *img = calloc(1, n);
+        if (img) {
+            psx_cd_synth_exe(img, n);
+            psx_iso_build("/tmp/hb_hle_selftest.iso", img, n, "PSX.EXE", 0);
+            psx_disc_t disc;
+            if (psx_disc_open(&disc, "/tmp/hb_hle_selftest.iso") == 0) {
+                psx_hle_install(&h, &c, &core);           /* 重装(HLE 钩归零后) */
+                h.disc = &disc;
+                memcpy((void *)(uintptr_t)(D + 0x1600u), "cdrom:\\PSX.EXE;1", 17u);
+                hle_go(&c, 0xA0u, 0x00u, P); c.gpr[4] = D + 0x1600u; psx_cpu_run(&c, 3);
+                uint32_t fd = c.gpr[2];
+                hle_go(&c, 0xA0u, 0x02u, P); c.gpr[4] = fd; c.gpr[5] = E + 0x2000u; c.gpr[6] = 0x800u;
+                psx_cpu_run(&c, 3);
+                uint32_t got = c.gpr[2];
+                hle_go(&c, 0xA0u, 0x01u, P); c.gpr[4] = fd; c.gpr[5] = 0x10u; c.gpr[6] = 0u;
+                psx_cpu_run(&c, 3); uint32_t lp = c.gpr[2];
+                hle_go(&c, 0xA0u, 0x04u, P); c.gpr[4] = fd; psx_cpu_run(&c, 3); uint32_t cr = c.gpr[2];
+                uint32_t pc2 = 0; memcpy(&pc2, (void *)(uintptr_t)(E + 0x2000u + 0x10u), 4);
+                HCHK(fd == 0x1100u && got == 0x800u && lp == 0x10u && cr == 0u &&
+                     pc2 == 0x80040010u, "v16_file_api_open_read");
+                psx_disc_close(&disc);
+            } else HCHK(0, "v16_file_api_open_read");
+            free(img);
+        }
+    }
     printf("HLE_EV bad=%d nlog=%u\n", bad, h.nlog);
     psx_core_free(&core);
     if (bad) { printf("HLE SELFTEST FAIL (%d)\n", bad); return 1; }

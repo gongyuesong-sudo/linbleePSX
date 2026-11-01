@@ -12,7 +12,7 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(Vulkan REQUIRED)
 
 add_executable(bleem_port
-  src/main.c src/boot.c src/vk_host.c src/resources.c src/lzfmt.c src/psx_core.c src/psx_cpu.c src/psx_dev.c src/psx_hle.c)
+  src/main.c src/boot.c src/vk_host.c src/resources.c src/lzfmt.c src/psx_core.c src/psx_cpu.c src/psx_dev.c src/psx_hle.c src/psx_cdrom.c)
 target_include_directories(bleem_port PRIVATE src ${SDL2_INCLUDE_DIRS}
   "$ENV{HOME}/.local/portroot/usr/include/x86_64-linux-gnu")
 target_link_libraries(bleem_port PRIVATE ${SDL2_LIBRARIES} Vulkan::Vulkan m)

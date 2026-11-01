@@ -4,7 +4,11 @@
  */
 #include "psx_dev.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+struct psx_dev_s;
+static void cd_cmd_exec(struct psx_dev_s *d, uint8_t cmd);
 
 /* ---- 楔6c trace 面: MMIO offset 直方图(单实例全局) ---- */
 #define MH 0x2500   /* 0x9400/4 */
@@ -47,13 +51,17 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     }
     case 0x1074: return d->i_mask;
     case 0x1060: return d->ram_size;              /* 楔6d RAM_SIZE 回读(BIOS 探测) */
-    /* 楔8b-① CDROM CDREAD/CDSTAT/CDSEL(0x1F801820-25, 正字 no$psx 面) */
-    case 0x1820: { uint32_t v = d->cd_out[0]; d->cd_out[0] = 0; return v; }
-    case 0x1821: { uint32_t v = d->cd_out[1]; d->cd_out[1] = 0; return v; }
-    case 0x1822: { uint32_t v = d->cd_out[2]; d->cd_out[2] = 0; return v; }
-    case 0x1823: { uint32_t v = d->cd_out[3]; d->cd_out[3] = 0; return v; }
-    case 0x1824: { /* CDSTAT: bit7=数据出口有货(四字节或), 恒 0x18(drive ready 系) */
-        uint32_t rdy = (d->cd_out[0]|d->cd_out[1]|d->cd_out[2]|d->cd_out[3]) ? 0x80u : 0u;
+    /* 楔8b-① CDROM CDREAD/CDSTAT(0x1F801820-24, 正字 no$psx 面)
+     * 清洁房楔3: 响应 FIFO 化 —— 0x1820-23 逐字节弹出, bit7=队列有货 */
+    case 0x1820: case 0x1821: case 0x1822: case 0x1823: {
+        if (d->cd_resp_n <= 0) return 0;
+        uint8_t v = d->cd_resp[0];
+        for (int i = 0; i + 1 < d->cd_resp_n; i++) d->cd_resp[i] = d->cd_resp[i + 1];
+        d->cd_resp_n--;
+        return v;
+    }
+    case 0x1824: { /* CDSTAT: bit7=响应出口有货, 恒 0x18(drive ready 系) */
+        uint32_t rdy = d->cd_resp_n > 0 ? 0x80u : 0u;
         return rdy | 0x18u; }
     case 0x1825: return 0;                        /* CDSEL/CONFIG 回读 */
     case 0x1044: return d->reg1044;
@@ -94,16 +102,24 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1070: d->i_stat &= val; break;              /* docs/57 写 AND 清 */
     case 0x1074: d->i_mask = val; break;
     case 0x1060: d->ram_size = val & 0xFFFFu; break;   /* RAM_SIZE 配置存值 */
-    /* 楔8b-① CDROM 命令口: 写=驱动 ack 中断 + 装载响应(无盘恒 [0x11,0x14,0xC0,0x42]
-     * ——no$psx GetStat 无盘标准参; INIT/其余命令同型响应 = trace 驱动迭代第一档) */
+    /* 楔8b-① CDROM 命令口: 写=驱动 ack 中断 + 装载响应 FIFO。
+     * 无盘面保持既有四参 [0x11,0x14,0xC0,0x42] (no$psx GetStat 无盘正字);
+     * 盘在位面 (task-130 升级) 见 cd_cmd_exec —— 响应字节序=ACK 先行。 */
     case 0x1820:
         d->cd_cmd = val & 0xFFu; d->cd_cmds++;
+        d->cd_param[0] = (uint8_t)((val >> 8) & 0xFFu);   /* param0 随命令字高 8 位 */
         d->i_stat &= ~4u;                          /* ack CDINT(驱动收令) */
-        d->cd_out[0] = 0x11; d->cd_out[1] = 0x14;  /* no disc F1h */
-        d->cd_out[2] = 0xC0; d->cd_out[3] = 0x42;
+        cd_cmd_exec(d, (uint8_t)(val & 0xFFu));
         d->i_stat |= 4u;                           /* data-ready INT(两档合一) */
         break;
-    case 0x1824: case 0x1825: case 0x1826: case 0x1827: break;  /* TEST/CONFIG 写弃(观测面) */
+    case 0x1824:
+        if (size >= 4) { d->cd_param[1] = (uint8_t)val; d->cd_param[2] = (uint8_t)(val >> 8);
+                         d->cd_param[3] = (uint8_t)(val >> 16); d->cd_param[4] = (uint8_t)(val >> 24); }
+        else d->cd_param[1] = (uint8_t)val;
+        break;
+    case 0x1825: d->cd_param[2] = (uint8_t)val; break;
+    case 0x1826: d->cd_param[3] = (uint8_t)val; break;
+    case 0x1827: d->cd_param[4] = (uint8_t)val; break;
     case 0x1010: case 0x1014: case 0x1018: case 0x101c:
     case 0x1020: case 0x1024: case 0x1028: case 0x102c: break; /* 控制区存写弃(观测面) */
     case 0x1044: d->reg1044 = val; break;              /* docs/62 RMW 窗(简化直存) */
@@ -122,9 +138,106 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     }
 }
 
+
+/* ============ 清洁房楔3 (task-130): CDROM 命令执行器 + 盘在位面 ============ */
+#include "psx_cdrom.h"
+#include <stdlib.h>
+#include <string.h>
+void psx_dev_cd_attach(psx_dev_t *d, void *disc) { d->disc = disc; }
+
+static void cd_push(psx_dev_t *d, uint8_t b)
+{ if (d->cd_resp_n < 8) d->cd_resp[d->cd_resp_n++] = b; }
+static uint32_t cd_param_loc(const psx_dev_t *d)   /* param1..3 = 24-bit LBA LE */
+{ return (uint32_t)d->cd_param[1] | ((uint32_t)d->cd_param[2] << 8) | ((uint32_t)d->cd_param[3] << 16); }
+
+static void cd_cmd_exec(struct psx_dev_s *d0, uint8_t cmd)
+{ psx_dev_t *d = d0;
+    int disc = d->disc != NULL;
+    d->cd_resp_n = 0;                              /* 新命令冲刷旧响应(真机面) */
+    cd_push(d, 0x11);                              /* ACK 恒先行 (psx-spx 面) */
+    if (!disc) { cd_push(d, 0x14); cd_push(d, 0xC0); cd_push(d, 0x42);
+                 return; }                         /* 无盘面=全命令同型四参(BIOS 马拉松 task-121 定案保真) */
+    switch (cmd) {
+    case 0x01: /* GetStat: 无盘四参正字; 有盘=ready/闭盘/零错 七参 */
+        if (!disc) { cd_push(d, 0x14); cd_push(d, 0xC0); cd_push(d, 0x42); }
+        else { cd_push(d, 0x14); cd_push(d, 0x00); cd_push(d, d->cd_mode);
+               cd_push(d, 0x00); cd_push(d, 0x00); cd_push(d, 0x00); cd_push(d, 0x14); }
+        break;
+    case 0x02: d->cd_loc = cd_param_loc(d); break;              /* SetLoc */
+    case 0x15: case 0x16:                                       /* SeekL/P */
+        d->cd_loc = cd_param_loc(d); d->cd_sect_valid = 0; break;
+    case 0x06: { /* ReadN: v1 同步至帧缓冲 (DMA 接线=task-131) */
+        d->cd_sect_valid = 0; d->cd_bytes = 0;
+        if (disc) {
+            uint32_t nsec = d->cd_param[0] & 7u; if (!nsec) nsec = 1u;
+            if (nsec > 8u) nsec = 8u;
+            uint8_t tmp[8 * 2048];
+            if (psx_disc_read((psx_disc_t *)d->disc, d->cd_loc, nsec, tmp) == 0) {
+                memcpy(d->cd_sect, tmp, 2048);
+                d->cd_bytes = nsec * 2048u; d->cd_sect_valid = 1;
+                d->cd_loc += nsec;                              /* 读后指针推进 */
+            }
+        }
+        break; }
+    case 0x0A: d->cd_mode = 0x20; break;                        /* Init */
+    case 0x0E: d->cd_mode = d->cd_param[0]; break;              /* SetMode */
+    case 0x0F: cd_push(d, d->cd_mode); cd_push(d, 0); cd_push(d, 0); cd_push(d, 0); break; /* GetParam */
+    case 0x10: cd_push(d, (uint8_t)d->cd_loc); cd_push(d, (uint8_t)(d->cd_loc >> 8));
+               cd_push(d, (uint8_t)(d->cd_loc >> 16)); break;   /* GetLocL */
+    case 0x19: cd_push(d, disc ? 0x00 : 0x02); break;           /* Test */
+    case 0x56: if (disc) { cd_push(d, 0x94); cd_push(d, 0x09);
+                           cd_push(d, 0x19); cd_push(d, 0xC0); } break; /* GetId */
+    default: break;                                             /* 其余=仅 ACK (v1 诚实面) */
+    }
+}
+
+int psx_cd_dev_integration_probe(void)
+{
+    int bad = 0;   /* 返回=失败检查数 (0=PASS) */
+    psx_dev_t dev; psx_dev_init(&dev);
+    uint32_t n = 0xA00u; uint8_t *img = calloc(1, n);
+    if (!img) return 99;
+    psx_cd_synth_exe(img, n);
+    if (psx_iso_build("/tmp/hb_probe.iso", img, n, "PSX.EXE", 0) != 0) bad++;
+    psx_disc_t disc;
+    if (psx_disc_open(&disc, "/tmp/hb_probe.iso") != 0) bad++;
+    else {
+        psx_dev_cd_attach(&dev, &disc);
+        /* Init → 消费 ACK */
+        psx_dev_write(&dev, 0x1820, 0x0A, 1);
+        if (psx_dev_read(&dev, 0x1820, 1) != 0x11) bad++;
+        /* Test: 有盘=00 */
+        psx_dev_write(&dev, 0x1820, 0x19, 1);
+        if (psx_dev_read(&dev, 0x1820, 1) != 0x11 || psx_dev_read(&dev, 0x1821, 1) != 0x00) bad++;
+        /* SetLoc FILE_LBA → ReadN(1): 帧缓冲 = exe 头 (pc@0x10) */
+        psx_dev_write(&dev, 0x1824, PSX_ISO_FILE_LBA, 4);
+        psx_dev_write(&dev, 0x1820, 0x02, 1);                    /* SetLoc */
+        if (psx_dev_read(&dev, 0x1820, 1) != 0x11) bad++;
+        psx_dev_write(&dev, 0x1820, 0x06u | (1u << 8), 2);      /* cmd + param0=1 */
+        if (psx_dev_read(&dev, 0x1820, 1) != 0x11) bad++;       /* 消 ACK */
+        uint32_t pc = 0xDEAD; memcpy(&pc, dev.cd_sect + 0x10, 4);
+        if (!dev.cd_sect_valid || pc != 0x80040010u) bad += 10;
+        /* GetStat 有盘形态 = [0x11,0x14,0x00,...] 且 STAT bit7 弹前=1 */
+        psx_dev_write(&dev, 0x1820, 0x01, 1);
+        if ((psx_dev_read(&dev, 0x1824, 1) & 0x80u) == 0) bad++;
+        if (psx_dev_read(&dev, 0x1820, 1) != 0x11 || psx_dev_read(&dev, 0x1821, 1) != 0x14 ||
+            psx_dev_read(&dev, 0x1822, 1) != 0x00) bad++;
+        /* 无盘面回归: 卸载后 GetStat 四参正字 */
+        psx_dev_cd_attach(&dev, NULL);
+        psx_dev_write(&dev, 0x1820, 0x01, 1);
+        if (psx_dev_read(&dev, 0x1820, 1) != 0x11 || psx_dev_read(&dev, 0x1821, 1) != 0x14 ||
+            psx_dev_read(&dev, 0x1822, 1) != 0xC0 || psx_dev_read(&dev, 0x1823, 1) != 0x42) bad++;
+        psx_disc_close(&disc);
+    }
+    free(img);
+    return bad;
+}
+
 /* ================= --dev-selftest (楔4 验收面) ================= */
 #include "psx_core.h"
 #include "psx_cpu.h"
+#include <stdlib.h>
+#include <string.h>
 
 #define DCHK(cond, name)                                                       \
     do { int _ok = (cond) ? 1 : 0;                                             \
