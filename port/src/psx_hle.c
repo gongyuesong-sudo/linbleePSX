@@ -1193,9 +1193,23 @@ int cmd_retail_probe(int argc, char **argv)
     uint32_t done = 0;
     static uint32_t hpc[4096];                    /* pc 热点采样 (page 桶, 诊断 RETAIL_HOT) */
     const int hot = getenv("RETAIL_HOT") != NULL;
+    uint32_t trap_code = 0xFFFFFFFFu;               /* task-158: 目标 excode(1=任意) */
+    { const char *tp = getenv("RETAIL_TRAP");
+      if (tp) trap_code = (uint32_t)strtoul(tp, NULL, 0); }
     while (done < cycles) {
         uint32_t n = frame_cycles < cycles - done ? frame_cycles : cycles - done;
         if (hot) for (uint32_t z = 0; z < n; z += 64u) { psx_cpu_step(&cpu); hpc[(cpu.pc >> 4) & 4095u]++; }
+        else if (trap_code != 0xFFFFFFFFu) {
+            /* task-158 楔19: RETAIL_TRAP=<excode hex 或 1>=目标异常前一刻逐帧步停 */
+            for (uint32_t z = 0; z < n; z++) {
+                uint32_t eb = cpu.exc_n;
+                psx_cpu_step(&cpu);
+                if (cpu.exc_n != eb) {
+                    uint32_t ex = (cpu.cop0[13] >> 2) & 0x1Fu;
+                    if (trap_code == 1u || trap_code == ex) break;
+                }
+            }
+        }
         else psx_cpu_run(&cpu, n);
         done += n;
         {   /* 每 cause 首现场 (task-146): 新 excode 出现即 dump epc±128B RAM + 指令 */
@@ -1214,15 +1228,57 @@ int cmd_retail_probe(int argc, char **argv)
                     FILE *df = fopen(fname, "wb");
                     if (df) {
                         uint32_t start = (cpu.cop0[14] & ~0x7Fu) - 0x80u;
+                        if (cpu.cop0[14] < 0x100u) start = 0u;   /* 楔19: epc≈0 下溢门 */
                         for (uint32_t z = 0; z < 0x100u; z += 4u) {
-                            void *qd = psx_translate(&core, start + z, &ww6);
-                            uint32_t vv = qd ? *(uint32_t*)qd : 0u;
+                            uint32_t gqd = start + z;
+                            void *qd = (gqd >= 0x80000000u && gqd < 0x88000000u)
+                                     ? psx_translate(&core, gqd, &ww6) : NULL;
+                            uint32_t vv = (qd && ww6 == PSX_WIN_RAM) ? *(uint32_t*)qd : 0u;
                             fwrite(&vv, 4, 1, df);
                         }
                         fprintf(stderr, "EXC1ST dump %s base=%08x\n", fname, start);
                         fclose(df);
                     }
                     fflush(stderr);
+                }
+                /* task-158 楔19: RETAIL_TRAP=首异常即停 + pc 历史环 + 栈窗 */
+                if (getenv("RETAIL_TRAP")) {
+                    extern uint32_t g_pcring[64]; extern uint32_t g_pcring_i;
+                    fprintf(stderr, "TRAP first-exc cause=%x epc=%08x pc=%08x ra=%08x sp=%08x v0=%08x a0=%08x a1=%08x t0=%08x t1=%08x t2=%08x\n",
+                            cpu.cop0[13], cpu.cop0[14], cpu.pc, cpu.gpr[31], cpu.gpr[29],
+                            cpu.gpr[2], cpu.gpr[4], cpu.gpr[5], cpu.gpr[8], cpu.gpr[9], cpu.gpr[10]);
+                    fprintf(stderr, "TRAP pcring(旧->新):");
+                    for (unsigned qz = 0; qz < 64u; qz++)
+                        fprintf(stderr, " %08x", g_pcring[(g_pcring_i + qz) & 63u]);
+                    fprintf(stderr, "\n");
+                    uint32_t wwt;
+                    fprintf(stderr, "TRAP ringwin(RAM 活体反汇编窗):");
+                    for (unsigned qz = 0; qz < 64u; qz++) {
+                        uint32_t pq = g_pcring[(g_pcring_i - 1u - qz) & 63u];
+                        void *pt = (pq >= 0x80000000u && pq < 0x88000000u)
+                                 ? psx_translate(&core, pq, &wwt) : NULL;
+                        fprintf(stderr, "\n  %08x: %08x%s", pq,
+                                (pt && wwt == PSX_WIN_RAM) ? *(uint32_t*)pt : 0xDEDu,
+                                qz < 10u ? " <<<" : "");
+                        if (qz >= 24u) break;
+                    }
+                    fprintf(stderr, "\n");
+                    fprintf(stderr, "TRAP vecpage:");
+                    for (uint32_t vp = 0x80u; vp <= 0xC0u; vp += 0x10u) {
+                        void *pv = psx_translate(&core, 0x80000000u + vp, &wwt);
+                        void *pv1 = psx_translate(&core, 0x80000000u + vp + 4u, &wwt);
+                        fprintf(stderr, " [%02x]=%08x/%08x", vp,
+                                pv ? *(uint32_t*)pv : 9u, pv1 ? *(uint32_t*)pv1 : 9u);
+                    }
+                    fprintf(stderr, "\n");
+                    fprintf(stderr, "TRAP stack@sp:");
+                    for (int qz = 0; qz < 16; qz++) {
+                        void *qt = psx_translate(&core, (cpu.gpr[29] & ~3u) + (uint32_t)qz * 4u, &wwt);
+                        fprintf(stderr, " %08x", (qt && wwt == PSX_WIN_RAM) ? *(uint32_t*)qt : 0xDEDu);
+                    }
+                    fprintf(stderr, "\n");
+                    fflush(stderr);
+                    break;
                 }
                 prev_exc = cpu.exc_n;
             }

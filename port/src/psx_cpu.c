@@ -173,9 +173,13 @@ static int irq_check(psx_cpu_t *c)
     return 0;
 }
 
+/* task-158 楔19: pc 历史环(崩溃即时取证) — cached enable, 禁用零开销 */
+uint32_t g_pcring[64]; uint32_t g_pcring_i; static int g_pcring_on = -1;
 int psx_cpu_step(psx_cpu_t *c)
 {
     g_psx_cpu_sysclk = c->cycles;
+    if (g_pcring_on<0) g_pcring_on = getenv("RETAIL_PCRING")!=NULL;
+    if (g_pcring_on) { g_pcring[g_pcring_i & 63u] = c->pc; g_pcring_i++; }
     if (c->core && c->core->dev) psx_dev_sync((psx_dev_t *)c->core->dev);
     if (irq_check(c)) { c->cycles++; return 0; }
     uint32_t insn;
@@ -310,7 +314,18 @@ int psx_cpu_step(psx_cpu_t *c)
                 }
                 c->cycles++; return 0; }
             if (f == 0x10) {              /* rfe (R3000 正字, task-153): IE=旧EXL, EXL=0, ERL=1
-                 * task-154 加固: 非例外态=陈旧 epca → nop 语义顺序续跑 */
+                 * task-154 加固: 非例外态=陈旧 epca → nop 语义顺序续跑
+                 * task-158 楔19: 影子帧在 = 水位派发 dispatcher 以 rfe 结束(不叫
+                 * B0:17, 打击者1945 实证 ra 毁链) → 同 B0:17 弹帧回主线正字 */
+                if (c->ctx_saved) {
+                    c->ctx_saved = 0;
+                    c->cop0[12] = c->saved_status;
+                    c->cop0[14] = c->saved_epc; c->cop0[13] = c->saved_cause;
+                    for (int rr = 0; rr < 32; rr++) c->gpr[rr] = c->saved_gpr[rr];
+                    c->pc = c->saved_pc; c->npc = c->saved_npc;
+                    c->branch_pending = 0;
+                    c->cycles++; return 0;
+                }
                 uint32_t st0 = c->cop0[12];
                 if (st0 & 2u) {
                     uint32_t ie0 = (st0 >> 1) & 1u;

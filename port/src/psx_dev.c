@@ -94,6 +94,8 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     }
     case 0x1074: return d->i_mask;
     case 0x1060: return d->ram_size;              /* 楔6d RAM_SIZE 回读(BIOS 探测) */
+    case 0x1130: return d->ram_size;              /* RAM_SIZE 正字位 (task-158 楔19):
+        * psx-spx 公开 = 1F801130 读 0=8MB(本模型满幅), 1=2MB。写=忽略(只读)。 */
     /* 楔8b-① CDROM CDREAD/CDSTAT(0x1F801820-24, 正字 no$psx 面)
      * 清洁房楔3: 响应 FIFO 化 —— 0x1820-23 逐字节弹出, bit7=队列有货 */
     case 0x1820: case 0x1821: case 0x1822: case 0x1823: {
@@ -114,7 +116,8 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
         d->phase104a++;
         return (1u << ph) | (d->reg1044 & 0x100u ? 0x100u : 0u);
     }
-    case 0x1100: case 0x1110: case 0x1120: case 0x1130: { /* Timer cnt (task-135 全语义 M2):
+    case 0x1100: case 0x1110: case 0x1120: { /* Timer cnt (task-135 全语义 M2):
+        * task-158 楔19: 0x1130 剔除 = RAM_SIZE 正字(PSX 仅 T0-T2)
         enable 才走; target 模式(bit7=0)达 target 归零+IRQ; wrap 模式(bit7=1)0xFFFF 回绕+IRQ;
         IRQ 置位受 ctrl bit6 门 (psx-spx 公开位义) */
         psx_dev_sync(d);                                       /* 时钟驱动(task-152):
@@ -122,9 +125,9 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
         * 真机=计数随 CPU 时钟走, 背靠背读同值。 */
         return d->timer_cnt[(off - 0x1100) / 0x10];
     }
-    case 0x1104: case 0x1114: case 0x1124: case 0x1134:
+    case 0x1104: case 0x1114: case 0x1124:
         return d->timer_ctrl[(off - 0x1104) / 0x10];
-    case 0x1108: case 0x1118: case 0x1128: case 0x1138:
+    case 0x1108: case 0x1118: case 0x1128:
         return d->timer_target[(off - 0x1108) / 0x10];
     case 0x1801: case 0x1802: case 0x1803:   /* LIBSN 设备握手轮询面: 同步 GPU 即时消费 → 0 */
     case 0x1800: case 0x1810: case 0x1808:
@@ -160,6 +163,7 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1070: d->i_stat &= val; break;              /* docs/57 写 AND 清 */
     case 0x1074: d->i_mask = val; break;
     case 0x1060: d->ram_size = val & 0xFFFFu; break;   /* RAM_SIZE 配置存值 */
+    case 0x1130: break;                                 /* RAM_SIZE 只读 (楔19) */
     /* 楔8b-① CDROM 命令口: 写=驱动 ack 中断 + 装载响应 FIFO。
      * 无盘面保持既有四参 [0x11,0x14,0xC0,0x42] (no$psx GetStat 无盘正字);
      * 盘在位面 (task-130 升级) 见 cd_cmd_exec —— 响应字节序=ACK 先行。 */
@@ -181,13 +185,13 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1010: case 0x1014: case 0x1018: case 0x101c:
     case 0x1020: case 0x1024: case 0x1028: case 0x102c: break; /* 控制区存写弃(观测面) */
     case 0x1044: d->reg1044 = val; break;              /* docs/62 RMW 窗(简化直存) */
-    case 0x1104: case 0x1114: case 0x1124: case 0x1134:
+    case 0x1104: case 0x1114: case 0x1124:
         { int t3 = (off - 0x1104) / 0x10;
           d->timer_ctrl[t3] = val & 0xFFFFu;
           d->timer_last_sync[t3] = psx_sysclk_provider ? psx_sysclk_provider() : 0u; } break;
-    case 0x1108: case 0x1118: case 0x1128: case 0x1138:
+    case 0x1108: case 0x1118: case 0x1128:
         d->timer_target[(off - 0x1108) / 0x10] = val; break;
-    case 0x1100: case 0x1110: case 0x1120: case 0x1130:
+    case 0x1100: case 0x1110: case 0x1120:
         { int t4 = (off - 0x1100) / 0x10;
           d->timer_cnt[t4] = val & 0xFFFFu;
           d->timer_last_sync[t4] = psx_sysclk_provider ? psx_sysclk_provider() : 0u; } break;
@@ -450,6 +454,11 @@ int cmd_dev_selftest(int argc, char **argv)
     dev.timer_ctrl[2] = 0u; dev.timer_cnt[2] = 0x5555u;   /* disable 不走 */
     DCHK(psx_dev_read(&dev, 0x1120, 4) == 0x5555u && dev.timer_cnt[2] == 0x5555u,
          "timer2_disabled_frozen");
+
+    DCHK(psx_dev_read(&dev, 0x1130, 4) == 0u, "ram_size_1130_reads_0_8mb");   /* task-158 楔19 */
+    psx_dev_write(&dev, 0x1130, 0xBEEF2u, 4);
+    DCHK(psx_dev_read(&dev, 0x1130, 4) == 0u, "ram_size_1130_write_ignored");
+    DCHK(psx_dev_read(&dev, 0x1100, 4) == psx_dev_read(&dev, 0x1100, 4), "timer0_stable_read");
 
     /* 4. C2 握手窗 1044/104A 双相位 (docs/62) */
     dev.phase104a = 0;

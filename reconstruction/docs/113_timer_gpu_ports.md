@@ -290,3 +290,18 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 打击者1945 **翻案**: 旧"200M 零异常 pc=8016cfa0"= 2MB 折叠假死环; 8MB 后突破至 served=82426 深度 rootcall 段, 新卡点 jr $ra→ra=0x801FFFB0(栈) 执行数据字 00000001 → excode10×82417 = 下一楔取证对象 (ra 污染链: 疑 rootcall 返回路径某服务未设 ra)。
 - 八面 115P/0F (psx 折叠断言 xlat_ram_full_mirror_fold/xlat2_bfc8 升 8MB 正字)。
 - 教训: 内存掩码扩容必连带 ①allocs=掩码幅 ②裸指针诊断窗门 ③全部跳转守卫范围; MAP_FIXED_NOREPLACE 保护宿主, 崩溃必是逻辑越界非覆盖。
+
+## 楔19 (SESSION-158): 水位派发 rfe 弹帧正字 — 打击者1945 excode10 风暴根除
+- 取证链: RETAIL_TRAP=<excode> 逐拍停 + RETAIL_PCRING pc 历史环 + ringwin 活体 RAM 反汇编
+  (文件反汇编≠运行时 RAM 再证: 80162984 处活体=addiu $t2,0xa0/jr $t2/addiu $t1,0x3f rootcall 蹦床)。
+- 死环: rootcall 水位派发(task-153 楔15)存帧后 dispatcher 以 **rfe 结束**(不走 B0:17)→
+  旧 rfe 处理不弹影子帧 → 主线程 ra/pc 丢 → jr $ra 落栈数据 0x00000001(reserved) → excode10×82417。
+- 正字: rfe 遇 ctx_saved=1 → 弹影子帧(与 hb_return_from_exc 同字段)= LIBSN dispatcher 出口兜底闭环。
+  打击者1945 20M: served 8 exc 0(旧同窗 exc=82417 风暴); vec 页活体钉字 [a0]=0000100c/03e00008 完好。
+- RAM_SIZE 正字: 0x1F801130 从 timer case 组全剔除(PSX 仅 T0-T2), 读=ram_size(0=8MB), 写=只读忽略;
+  dev 断言 +3 (ram_size_1130_reads_0_8mb / write_ignored / timer0_stable_read) = 八面 118P/0F。
+- 交叉面(rfe 修复后, RAM_SIZE 前二进制): 北斗神拳 200M served=172 UNK=0 exc=1(epc 8004f458 良性同旧);
+  三国志2 200M served=11 exc=0 ✓; NBA 200M served=27 UNK=3 exc=0 ✓; 窗口 hw=1 ✓。
+- 诊断面新增(全部门控零开销): RETAIL_TRAP=<excode hex/1=任意> 首目标异常即停; RETAIL_PCRING=1 64 深 pc 环;
+  TRAP 现场含 vec 页活体 + ringwin RAM 反汇编窗 + 栈窗。
+- 诊断坑(本楔踩): RETAIL_HOT 采样 z+=64 实为 1/64 步进(时间轴缩水 64x), HOT 结果不可与 cpu_run 面直比。
