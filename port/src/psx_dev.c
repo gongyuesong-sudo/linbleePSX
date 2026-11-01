@@ -402,15 +402,12 @@ void psx_dev_vframe(psx_dev_t *d)
     if (!d) return;
     d->i_stat |= 0x1u;      /* VBlank (bit0 正字, 楔8b-2 定案) */
     d->vframes++;
-    /* 楔32: BIOS VBlank tick 服务面直投 RAM 槽 [800D2AD0](主循环 80051080 每帧
-     * 读比对, 真机=BIOS 常驻递增; WPC 钉字无供=永 continue)。psx_translate 双门。 */
+    /* 楔40 翻案(楔32 注入撤除): [800D2AD0] = **消费者 cursor** 非 BIOS tick
+     * 供给槽 —— 主循环 80051088 `slt [D2AD0], GetTickWait返值([[75054]] 稳定
+     * 读 - [75058] 基)` , bnez 才进 510c0 服务段(注入态 WPC 实钉 510c0 hits=0,
+     * vframes 直投反超游戏自维 tick → 条件永灭 = 主环死锁真因)。宿主不得写。 */
     if (d->core) {
         uint32_t bw = 0;
-        void *q = psx_translate((const psx_core_t *)d->core, 0x800D2AD0u, &bw);
-        if (q && bw == PSX_WIN_RAM) {
-            uint32_t tv = d->vframes;
-            memcpy(q, &tv, 4);
-        }
         /* 楔36 转正(楔33/35 实证): 真机 BIOS EntryInt 派发面置 ISR-active
          * [800750C2]=1, 游戏 VBlankIntCB(8005202C) 退出清零; 本核中断派发不经
          * BIOS EntryInt 面 → 该标志无人置, 主泵门永 0。转正=VBlank 派发入口等价
