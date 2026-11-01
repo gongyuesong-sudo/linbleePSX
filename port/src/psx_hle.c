@@ -1625,9 +1625,30 @@ void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick)
     if (!psx_translate(h->core, tramp, &ww)) { g_hle_depth--; return; }
     uint32_t save_pc = c->pc, save_npc = c->npc;
     int save_pend = (int)c->branch_pending; uint32_t save_tgt = c->branch_target;
+    /* 楔31: fire 全 32 GPR + hi/lo + cop0 保存恢复(楔21 纪律补全: 旧版只存 ra,
+     * 直接 fire 会毁主线程 s0-s7; RETAIL_FIREFULL=1 实验门控) */
+    uint32_t save_gpr[32]; for (int gi = 0; gi < 32; gi++) save_gpr[gi] = c->gpr[gi];
+    uint32_t save_hi = c->hi, save_lo = c->lo;
+    uint32_t save_cop0[4]; for (int ci = 0; ci < 4; ci++)
+        save_cop0[ci] = c->cop0[12 + ci];  /* 12 SR / 13 CAUSE / 14 EPC / 16 */
+    int save_ctx = (int)c->ctx_saved;
+    int fire_full = getenv("RETAIL_FIREFULL") != NULL;
+    (void)fire_full; (void)save_hi; (void)save_lo;
     uint32_t save_ra = c->gpr[31];
     hle_wr32(h, tramp, 0x03E00008u);              /* jr $ra */
     hle_wr32(h, tramp + 4u, 0u);                   /* nop */
+    /* 楔31: LIBSN 队列泵 = 8005F348 (活体钉字: 扫 8×0x18 TCB@800D42E0 stride,
+     * 消费[800D43A0]/[800D43A8], 产出[800D43A4]) = 真机 BIOS VBlank 服务面。
+     * RETAIL_FIREFULL=1 每 VBlank 以 fire 上下文直调(ra=tramp)。 */
+    if (fire_full) {
+        c->gpr[31] = tramp; c->branch_pending = 0;
+        c->pc = tramp; c->npc = 0x8005F348u;      /* tramp 延迟槽进泵 */
+        for (uint32_t st = 0; st < 400u; st++) {
+            psx_cpu_step(c);
+            if (c->pc == tramp && c->npc != 0x8005F348u) break;
+        }
+        c->branch_pending = 0;
+    }
     for (int z = 0; z < 16; z++) {
         if (!h->cb[z].used || h->cb[z].func < 0x80000000u) continue;
         c->gpr[4] = tick; c->gpr[5] = h->cb[z].class_; c->gpr[6] = h->cb[z].id;
@@ -1643,6 +1664,12 @@ void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick)
         c->branch_pending = 0;
     }
     c->pc = save_pc; c->npc = save_npc; c->gpr[31] = save_ra;
+    /* 楔31: 全上下文恢复(与 sysrp_fire 同纪律; 楔21 教训=只存 ra 毁主线程 s 系) */
+    if (fire_full) {
+        for (int gz = 0; gz < 32; gz++) c->gpr[gz] = save_gpr[gz];
+        c->hi = save_hi; c->lo = save_lo;
+        for (int ci = 0; ci < 4; ci++) c->cop0[12 + ci] = save_cop0[ci];
+    }
     c->branch_pending = (uint32_t)save_pend; c->branch_target = save_tgt;
     g_hle_depth--;
 }
