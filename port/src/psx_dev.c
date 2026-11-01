@@ -480,7 +480,10 @@ int cmd_eng_selftest(int argc, char **argv)
     psx_dev_init(&dev);
     core.dev = &dev;
     psx_cpu_t c;
-    const uint32_t P = 0x80010000u, V0 = 0x80000000u, CNT = 0x80030000u;
+    /* task-150 正字: R3000 中断向量=0x80000180(BEV=0), 非 0x80000000
+     * (旧模型 150 前实证毁 ra/EXL 卡死; handler 0..36 恰好落在 180..1A4,
+     *  1A8=rfe 蹦床, 1B0=halt 环) */
+    const uint32_t P = 0x80010000u, V0 = 0x80000180u, CNT = 0x80030000u;
 
     /* E1 中断自动进入链: 轮询 64 次 EVTGEN 置位 → IP8 向量 → handler 清位+eret */
     EMIT(P + 0,  I_RT(0x0F, 0, 3, 0x1F80));            /* lui $3,0x1F80 */

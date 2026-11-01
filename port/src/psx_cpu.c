@@ -106,15 +106,30 @@ static int irq_check(psx_cpu_t *c)
     uint32_t st = c->cop0[12];
     if (!(st & 1u) || (st & 2u)) return 0;
     if (!(d->i_stat & d->i_mask & 0x3FFFu)) return 0;   /* 0-9 KSEG 源 + 10-13 T0-T3 (task-135: 0x1FFF 漏 T3 位) */
-    c->cop0[14] = c->npc;                 /* epc = 未执行指令 */
-    c->cop0[13] = (1u << 8);              /* cause: IP8(bit8), ExCode=0 中断 */
-    c->cop0[12] |= 2u;
-    c->branch_pending = 0;
-    uint32_t vec = (st & (1u << 22)) ? 0xBFC00000u : 0x80000000u;
-    c->pc  = vec - 4;
-    c->npc = vec;
-    c->exc_n++;
-    return 1;
+    uint32_t active = d->i_stat & d->i_mask & 0x3FFFu;
+    /* task-150 中断派发三级分派 (真机 R3000: 中断向量=0x80000180, 非 0x80000000;
+     * 旧跳 0x80000000 nop 海 = EXL 卡死 + ra 被 vector 页 jr $ra 毁伤) */
+    uint32_t dispw = 0;
+    if (!(st & (1u << 22))) {
+        uint32_t w10; void *p10 = psx_translate(c->core, 0x80000180u, &w10);
+        if (p10) dispw = *(const uint32_t *)p10;         /* 游戏自装 RFE 向量 */
+    }
+    if (!dispw && c->entry_hook) {
+        /* HookEntryInt 词置位派发 (task-150 证伪跳调用后): 中断到达 → [hookword]|=1,
+         * 游戏轮询侧自取; 不跳不明代码。 */
+        uint32_t hw; void *ph = psx_translate(c->core, c->entry_hook & ~3u, &hw);
+        if (ph) *(uint32_t *)ph |= 1u;
+        d->i_stat &= ~active;      /* 已投递 = 吞源(游戏 ack 走 I_STAT AND 清正字) */
+        return 0;
+    }
+    if (dispw) {   /* 游戏自装 RFE dispatcher: 目标=向量地址本身(handler 首指令), 非其内容 */
+        c->cop0[14] = c->npc; c->cop0[13] = (1u << 8); c->cop0[12] |= 2u;
+        c->branch_pending = 0;
+        c->pc = 0x80000180u - 4u; c->npc = 0x80000180u; c->exc_n++;
+        return 1;
+    }
+    d->i_stat &= ~active;   /* 无派发面: 诚实吞源防 livelock (真机会重入 nop 海=更糟) */
+    return 0;
 }
 
 int psx_cpu_step(psx_cpu_t *c)

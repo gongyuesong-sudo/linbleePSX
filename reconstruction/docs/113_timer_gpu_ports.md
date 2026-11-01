@@ -158,3 +158,22 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   八面 0F; 窗口 hw=1。
 - **下楔**: ①精读 PSn00bSDK AddCblk/70mA 设备链源(func 参数形态+event 号) 开 RETAIL_CB
   默认; ②若派发正确后游戏仍等, 追设备状态机下一字段(CDROM 读完成=DMA3 已就位)。
+
+## SESSION-150 追加 (楔 12 — 中断派发三级分派转正 + HookEntryInt 证伪)
+- **CALLTR 取证面**(每 (vec,cmd) 首见参数+pc) 一次跑出全 boot 服务画像:
+  C0:0A=(3,0,800750C0) A0:49/72/44 B0:08/0A(DMA3!)/0B/0C/19/35/4A/4B/56/57/5B ——
+  服务面全景首次可见。
+- **R3000 中断向量正字**: 旧 irq_check 跳 `0x80000000`(nop 海)=EXL 永久卡死 +
+  被 vector 页 `jr $ra` 毁伤 ra; 正字=**0x80000180**(BEV=0)。三级分派:
+  游戏自装 dispatcher(读 [80000180]≠0 即转发) > HookEntryInt 词派发 > 诚实吞源防 livelock。
+- **HookEntryInt 证伪钉字**: 本盘传 `0x800750F8`=数据旗标词地址(RAM 实测=可复用缓冲,
+  文件字节恰为代码是巧合链) —— 跳调用风暴 excode10, **参数语义不许从单盘外观臆断**;
+  降级为"中断到达 → [hookword]|=1"。Cblk/3-19 链派发(RETAIL_CB)仍关:
+  a2=800750C0 派发时刻亦已被游戏复用为数据(RWATCH 抓到 80051e40 写旗标),
+  跳入必炸已两次实证。**邮箱清除方 = 3-19 内核链语义公开钉字缺失, 战役级卡点**。
+- **RETAIL_WATCH**(归一化 lo:hi 写监视, 归一化坑=gpa&0x1FFFFFFF 传 0x8xxxxxxx 静默失效)。
+- **回归**: 八面 114P/0F(ENG e1 向量改正字后); 北斗神拳 pc 深入邮箱轮询体 80051350
+  (原 80051340), exc 2→1; 三国志2 200M exc=0; 窗口 hw=1。
+- **下楔候选**: ①3-19 内核(class,id,ccb)派发模型的公开源(OpenBIOS r3000 dispatcher
+  / PsyQ LIBSN 反汇编文档)再攻邮箱; ②转攻三国志2 路线(零异常最深, 可能先到首帧);
+  ③NBA Live rootcall 面横向补服务。

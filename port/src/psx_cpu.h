@@ -25,7 +25,8 @@ typedef struct psx_cpu_s {
     uint32_t gte[32];    /* 楔5 GTE 寄存器堆(位布局=引擎自定义面, 真机对拍留后) */
     uint32_t cycles;
     uint32_t exc_n;
-    uint32_t syscall_code;   /* task-136: 最近 syscall 指令 code 位段 */      /* 异常进入计数 */
+    uint32_t syscall_code;
+    uint32_t entry_hook;   /* LIBSN HookEntryInt 中断派发钩子 (task-150, HLE 维护) */   /* task-136: 最近 syscall 指令 code 位段 */      /* 异常进入计数 */
     int      branch_pending;
     uint32_t branch_target;
     const psx_core_t *core;

@@ -8,6 +8,8 @@
  * 落到它, 延迟槽语义天然正确。
  */
 #include "psx_hle.h"
+/* task-150 写监视(RAM 覆盖取证) — 定义在 psx_cpu.c */
+extern uint32_t g_watch_lo, g_watch_hi, g_watch_n, g_watch_done_gpa, g_watch_last_pc;
 #include "psx_cdrom.h"
 #include "psx_dev.h"
 #include "psx_gpu.h"
@@ -169,6 +171,10 @@ static uint32_t hb_hook_entry(psx_hle_t *h, uint32_t cmd)
     (void)cmd;
     uint32_t old = h->entry_hook;
     h->entry_hook = A_P(0);
+    if (h->cpu) h->cpu->entry_hook = A_P(0);   /* task-150: CPU 中断派发同步可见 */
+    /* task-150 证伪钉字: HookEntryInt 入参在本盘=数据旗标词地址
+     * (800750F8 区运行时被游戏复用为缓冲, 跳入即乱码风暴)。
+     * 不铺 j; 派发语义降级为"中断时代读词写 1"(见 psx_cpu.c irq_check)。 */
     V0(old);
     return 0;
 }
@@ -234,7 +240,7 @@ static uint32_t ha_printf(psx_hle_t *h, uint32_t cmd)
 
 /* B(0x18) ResetEntryInt [S sys.s]: 解除 EntryInterrupt 挂钩, 返回旧 hook。 */
 static uint32_t hb_reset_entry(psx_hle_t *h, uint32_t cmd)
-{ (void)cmd; uint32_t old = h->entry_hook; h->entry_hook = 0u; V0(old); return 0; }
+{ (void)cmd; uint32_t old = h->entry_hook; h->entry_hook = 0u; if (h->cpu) h->cpu->entry_hook = 0u; V0(old); return 0; }
 
 static uint32_t hb_card_idle(psx_hle_t *h, uint32_t cmd)
 { (void)cmd; V0(0u); return 0; }
@@ -509,6 +515,16 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
     if (!h || g_hle_depth > 4) { hle_dbg_reject++; return 0; }
     if ((unsigned long)g_hle_depth > hle_dbg_maxdepth) hle_dbg_maxdepth = (unsigned long)g_hle_depth;
     uint32_t vec = cpu->gpr[10], cmd = cpu->gpr[9];   /* 真机 ABI: cmd=$t1(gpr9) vec=$t2(gpr10) */
+    if (getenv("CALLTR")) {   /* task-150: 每 (vec,cmd) 首次调用现场 = 参数语义钉字取证面 */
+        static uint32_t tr_seen[4096]; static uint32_t tr_cnt[4096];
+        uint32_t key = ((vec & 0xFFu) << 8) | (cmd & 0xFFu);
+        uint32_t ix = ((key * 2654435761u) >> 20) & 4095u;
+        while (tr_seen[ix] && tr_seen[ix] != key) ix = (ix + 1) & 4095u;
+        tr_seen[ix] = key;
+        if (++tr_cnt[ix] == 1u)
+            printf("CALLTR vec=%02x cmd=%02x a0=%08x a1=%08x a2=%08x a3=%08x pc=%08x\n",
+                vec, cmd, cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7], cpu->pc);
+    }
     /* BIOS 族选择器兜底 [psx-spx]: syscall code 0x40/0x48/0x4C = A/B/C 表 */
     if (vec != 0xA0u && vec != 0xB0u && vec != 0xC0u &&
         cpu->syscall_code >= 0x40u && cpu->syscall_code <= 0x4Cu &&
@@ -629,6 +645,9 @@ int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
     /* halt 环: j self; nop */
     hle_wr32(h, HLE_HALT_GPA,      (0x02u << 26) | ((HLE_HALT_GPA >> 2) & 0x03FFFFFFu));
     hle_wr32(h, HLE_HALT_GPA + 4,  0u);
+    /* RFE 蹦床 (task-150): HookEntryInt 钩子 jr $ra 落此 → rfe 清 EXL 回 epc */
+    hle_wr32(h, 0x800001A8u, 0x42000010u);           /* rfe */
+    hle_wr32(h, 0x800001ACu, 0u);                     /* nop */
     h->armed = 1; h->exe_pc = pc; h->exe_gp = gp; h->exe_sp = c->gpr[29];
     c->pc = c->npc - 4u;                          /* 复位簿记 */
     c->npc = pc; c->branch_pending = 0;
@@ -1070,6 +1089,8 @@ int cmd_retail_probe(int argc, char **argv)
     }
     /* 帧节拍正字 (task-146): PSX CPU 33.8688MHz / NTSC 60 = 564456 周期/帧 —
      * 旧 56445 少一量级(10x 欠喂), 真盘 vsync 内主循环全部显"慢一格"假象 */
+    { const char *w = getenv("RETAIL_WATCH");   /* task-150: lo:hi 写监视(RAM 覆盖取证) */
+      if (w) { unsigned lo,hi; if (sscanf(w,"%x:%x",&lo,&hi)==2) { g_watch_lo=lo; g_watch_hi=hi; g_watch_n=0; } } }
     const uint32_t frame_cycles = 564456u;
     uint32_t done = 0;
     static uint32_t hpc[4096];                    /* pc 热点采样 (page 桶, 诊断 RETAIL_HOT) */
@@ -1128,7 +1149,12 @@ int cmd_retail_probe(int argc, char **argv)
             }
         }
         if (!getenv("RETAIL_STEP")) psx_gpu_tick(&gpu);
-        psx_dev_vframe(&dev);
+        psx_dev_vframe(&dev);        if (g_watch_done_gpa != 0xFFFFFFFFu) {
+            uint32_t wv; void *pp = psx_translate(&core, g_watch_done_gpa, &wv);
+            unsigned short hv; memcpy(&hv, pp, 2); (void)hv;
+            printf("RWATCH pc=%08x 写 gpa=%08x post=%08x\n", g_watch_last_pc, g_watch_done_gpa, wv);
+            g_watch_done_gpa = 0xFFFFFFFFu;
+        }
         if (getenv("RETAIL_CB")) psx_hle_vblank_fire(&h, dev.vframes);   /* task-149 实验门控: 派发语义待真机钉, 默认关 */
         if (getenv("RETAIL_STEP")) {            /* 帧级进度诊 */
             printf("RF done=%u pc=%x exc=%u nlog=%u gp0=%u\n",
