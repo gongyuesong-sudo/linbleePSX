@@ -59,6 +59,8 @@ int  psx_iso_build(const char *out_path, const uint8_t *exe_data, uint32_t n,
 int  cmd_cd_selftest(int argc, char **argv);
 /* 合成 HBEXE 镜像 (测试夹具; psx_dev 集成探针共用): img=n 字节 2KB 头+段 */
 void psx_cd_synth_exe(uint8_t *img, uint32_t n);
+/* 自定义代码段版 (task-131 HBEXE 冷启夹具) */
+void psx_cd_synth_exe_full(uint8_t *img, uint32_t n, const uint32_t *code, uint32_t code_bytes);
 #define PSX_ISO_FILE_LBA 20u   /* psx_iso_build 布局: exe 起始 LBA */
 
 #endif /* PSX_CDROM_H */

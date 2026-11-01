@@ -61,7 +61,11 @@ int      hle_heap_free(psx_hle_t *h, uint32_t elem);
 /* PSX-EXE 装载器 (LoadImage 内核面): hdr_gpa=PSX-EXE 头(含0x800镜像) dest=0 时用头内 vaddr */
 int  hle_load_exe(psx_hle_t *h, uint32_t hdr_gpa, uint32_t dest,
                   uint32_t *pc_out, uint32_t *gp_out);
+/* 冷启链 (task-131): 零 BIOS 自举 = 盘上 PSX.EXE → LoadImage → 首帧武装。
+ * 前置 = psx_hle_install + disc 已开。返回 0=成功; *entry_out=入口 PC。 */
+int  psx_hle_coldboot(psx_hle_t *h, void *disc, uint32_t *entry_out);
 /* main.c 子命令入口 (--hle-selftest): 0=PASS */
 int  cmd_hle_selftest(int argc, char **argv);
+int  cmd_boot_selftest(int argc, char **argv);
 
 #endif /* PSX_HLE_H */

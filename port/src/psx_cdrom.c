@@ -315,23 +315,24 @@ int psx_iso_build(const char *out_path, const uint8_t *exe_data, uint32_t n,
 #define CDCHK(cond, name) do { printf("CD_TEST %s: %s\n", name, (cond) ? "PASS" : "FAIL"); \
     if (!(cond)) bad++; } while (0)
 
-void psx_cd_synth_exe(uint8_t *img, uint32_t n)   /* img=2048 头 + 0x100 data + code, n>=0xA00 */
-{
+void psx_cd_synth_exe_full(uint8_t *img, uint32_t n, const uint32_t *code, uint32_t code_bytes)
+{   /* img=2048 头 + 0x100 data + code@0x900, n>=0x900+code_bytes */
     memset(img, 0, n);
     uint32_t *h = (uint32_t *)img;
-    h[0x10 / 4] = 0x80040010u;      /* initial pc */
+    h[0x10 / 4] = 0x80041000u;      /* initial pc = 代码入口 */
     h[0x14 / 4] = 0x80040000u;      /* initial gp */
     h[0x18 / 4] = 0x80040000u;      /* data vaddr */
     h[0x1C / 4] = 0x100u;           /* data size */
     h[0x20 / 4] = 0x80041000u;      /* code vaddr */
-    h[0x24 / 4] = 0x08u;            /* code size */
-    /* code = addi $2,0,0x333; jr $ra; nop... */
-    uint8_t *code = img + 0x800 + 0x100;
-    uint32_t ci[2] = { (8u << 26) | (2u << 16) | 0x333u, 0x03E00008u };
-    memcpy(code, ci, sizeof ci);
-    /* data 图案 */
+    h[0x24 / 4] = code_bytes;       /* code size */
+    if (code && code_bytes) memcpy(img + 0x800 + 0x100, code, code_bytes);
     uint32_t *dat = (uint32_t *)(img + 0x800);
     for (int i = 0; i < 0x100 / 4; i++) dat[i] = 0xABCD0000u + (uint32_t)i;
+}
+void psx_cd_synth_exe(uint8_t *img, uint32_t n)   /* 默认夹具: addi $2=0x333; jr $ra */
+{
+    uint32_t ci[2] = { (8u << 26) | (2u << 16) | 0x333u, 0x03E00008u };
+    psx_cd_synth_exe_full(img, n, ci, sizeof ci);
 }
 
 int cmd_cd_selftest(int argc, char **argv)
@@ -392,7 +393,7 @@ int cmd_cd_selftest(int argc, char **argv)
         }
         uint32_t pc = 0, gp = 0;
         memcpy(&pc, hdr + 0x10, 4); memcpy(&gp, hdr + 0x14, 4);
-        CDCHK(ok == 0 && pc == 0x80040010u && gp == 0x80040000u, "t4_hbexe_header");
+        CDCHK(ok == 0 && pc == 0x80041000u && gp == 0x80040000u, "t4_hbexe_header");
         psx_disc_close(&d);
     }
     free(img);

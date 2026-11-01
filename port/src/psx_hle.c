@@ -341,6 +341,132 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
     return 1;
 }
 
+#include "psx_cdrom.h"
+#define BOOTCHK(cond, name) do { printf("BOOT_TEST %s: %s\n", name, (cond) ? "PASS" : "FAIL"); \
+    if (!(cond)) bad++; } while (0)
+/* ---------- 冷启链 (task-131) ---------- */
+/* 内核 halt 环: Execute 后 main 返回落点 (ra=halt) —— 记 exe_returned 观测 */
+#define HLE_HALT_GPA   0x800001B0u
+#define HLE_HDR_SCRATCH 0x801F0000u    /* PSX-EXE 2KB 头暂存 (对齐) */
+
+int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
+{
+    psx_disc_t *d = (psx_disc_t *)disc0;
+    if (!h || !h->cpu || !d) return -1;
+    int idx = psx_disc_find(d, "PSX.EXE");
+    if (idx < 0) return -2;                       /* v1 仅 PSX.EXE 面 (SYSTEM.CMD 后续楔) */
+    cd_file_t *f = &d->files[idx];
+    uint32_t nsec = (f->size + 2047u) / 2048u;
+    if (f->size == 0 || f->size > 24u * 1024u * 1024u) return -3;
+    uint8_t *img = calloc(1, (size_t)nsec * 2048u);
+    if (!img) return -4;
+    if (psx_disc_read(d, f->lba, nsec, img) != 0) { free(img); return -5; }
+    /* 头灌 guest 暂存 (LoadImage 契约=头须在 guest 可读、2KB 对齐) */
+    for (uint32_t i = 0; i < 0x800u; i += 4u) hle_wr32(h, HLE_HDR_SCRATCH + i,
+        (uint32_t)img[i] | ((uint32_t)img[i+1] << 8) | ((uint32_t)img[i+2] << 16) | ((uint32_t)img[i+3] << 24));
+    /* 数据+代码经 hle_load_exe(dest=0 → 头内 vaddr); 但其源=guest 连续镜像,
+     * 故整文件先灌入暂存之后的连续 guest 区 (0x801F0800+) */
+    for (uint32_t i = 0x800u; i + 4u <= nsec * 2048u; i += 4u) hle_wr32(h, HLE_HDR_SCRATCH + i,
+        (uint32_t)img[i] | ((uint32_t)img[i+1] << 8) | ((uint32_t)img[i+2] << 16) | ((uint32_t)img[i+3] << 24));
+    free(img);
+    uint32_t pc = 0, gp = 0;
+    if (hle_load_exe(h, HLE_HDR_SCRATCH, 0, &pc, &gp) != 0) return -6;
+    uint32_t sp_base = hle_rd32(h, HLE_HDR_SCRATCH + 0x28);
+    psx_cpu_t *c = h->cpu;
+    c->gpr[28] = gp;
+    c->gpr[29] = sp_base ? (sp_base - 16u) : 0x801FFFF0u;
+    memset(c->gpr, 0, 4 * sizeof(uint32_t));      /* a0..v1 清零(冷启正字) */
+    c->gpr[31] = HLE_HALT_GPA;                    /* main 返回=halt 环 */
+    /* halt 环: j self; nop */
+    hle_wr32(h, HLE_HALT_GPA,      (0x02u << 26) | ((HLE_HALT_GPA >> 2) & 0x03FFFFFFu));
+    hle_wr32(h, HLE_HALT_GPA + 4,  0u);
+    h->armed = 1; h->exe_pc = pc; h->exe_gp = gp; h->exe_sp = c->gpr[29];
+    c->pc = c->npc - 4u;                          /* 复位簿记 */
+    c->npc = pc; c->branch_pending = 0;
+    if (entry_out) *entry_out = pc;
+    return 0;
+}
+
+/* ---------- --boot-selftest (task-131 验收: 盘→冷跳→Execute→首帧 PC 轨迹+RAM 槽) ---------- */
+static void btst_go(psx_cpu_t *c, uint32_t vec, uint32_t cmd, uint32_t ra)
+{ c->gpr[8] = cmd; c->gpr[9] = vec; c->gpr[31] = ra;
+  c->branch_pending = 0; c->pc = vec - 4; c->npc = vec; }
+
+int cmd_boot_selftest(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    int bad = 0;
+    psx_core_t core; psx_cpu_t c; psx_hle_t h;
+    if (psx_core_init_fixed(&core) != 0) { printf("BOOT_EV init FAIL\n"); return 1; }
+    psx_cpu_reset(&c, &core);
+    psx_hle_install(&h, &c, &core);
+    /* HBEXE 程序体 (v1 自研, 零版权): 写标记 → putchar 'B'(经 A 族) → 再写 → 环 */
+    const uint32_t C = 0x80041000u;
+    uint32_t code[0x10];
+    #define ADDIU(rt,im) ((0x09u << 26) | (0u << 21) | ((rt) << 16) | ((im) & 0xFFFFu))
+    #define LUI(rt,im)   ((0x0Fu << 26) | (0u << 21) | ((rt) << 16) | ((im) & 0xFFFFu))
+    #define ADDIU_R(rs_,rt_,im) ((0x09u << 26) | ((rs_) << 21) | ((rt_) << 16) | ((im) & 0xFFFFu))
+    #define SW(rt,ofs,bs) ((0x2Bu << 26) | ((bs) << 21) | ((rt) << 16) | ((ofs) & 0xFFFFu)) /* rs=base, rt=data */
+    #define JR(rs)       ((rs) << 21 | 0x08u)
+    #define NOPW         0u
+    #define JAL(tgt)     ((0x03u << 26) | (((tgt) >> 2) & 0x03FFFFFFu))  /* 正字 op=3 (0x0F=LUI 族) */
+    #define J(tgt)       ((0x02u << 26) | (((tgt) >> 2) & 0x03FFFFFFu))
+    code[0]  = LUI(16, 0x8012);
+    code[1]  = ADDIU_R(16, 16, 0x3454);          /* $16 = 0x80123454 标记基址(4B 对齐; 0x...456 实测=真机同款地址错) */
+    code[2]  = ADDIU(4, 0x42);                 /* a0='B' */
+    code[3]  = JAL(C + 0x40);                  /* putchar wrapper */
+    code[4]  = NOPW;
+    code[5]  = ADDIU(17, 1);
+    code[6]  = SW(17, 0, 16);                  /* [0x80123454]=1: base=$16 data=$17 (putchar 已发生) */
+    code[7]  = ADDIU(18, 0x5A);
+    code[8]  = SW(18, 4, 16);
+    code[9]  = J(C + 0x38);
+    code[10] = NOPW; code[11] = NOPW; code[12] = NOPW; code[13] = NOPW;
+    code[14] = J(C + 0x38); code[15] = NOPW;   /* 环 @+0x38 */
+    /* wrapper @+0x40 (code[16..19]): PSYQ 几何 */
+    code[16] = ADDIU(8, 0x3C);                 /* $t1=A(putchar) */
+    code[17] = ADDIU(9, 0xA0);                 /* $t2=A0 族 */
+    code[18] = JR(9);
+    code[19] = NOPW;
+    uint32_t n = 0xA00u; uint8_t *img = calloc(1, n);
+    psx_cd_synth_exe_full(img, n, code, 80u);
+    if (psx_iso_build("/tmp/hb_boot.iso", img, n, "PSX.EXE", 1) != 0) bad++;
+    free(img);
+    psx_disc_t disc;
+    if (psx_disc_open(&disc, "/tmp/hb_boot.iso.cue") != 0) { printf("BOOT_EV disc FAIL\n"); return 1; }
+    h.disc = &disc;
+    uint32_t entry = 0;
+    int r = psx_hle_coldboot(&h, &disc, &entry);
+    BOOTCHK(r == 0 && entry == C, "b1_coldboot_entry");
+    BOOTCHK(c.gpr[28] == 0x80040000u && c.gpr[29] == 0x801FFFF0u, "b2_gp_sp");
+    /* 首帧推进: 64 步内应见 putchar(nlog) + 标记落 RAM + PC 入环 */
+    uint32_t n0 = h.nlog;
+    if (getenv("BOOT_TRACE")) {
+        for (int i = 0; i < 40; i++) {
+            uint32_t w; void *p = psx_translate(&core, c.npc, &w);
+            uint32_t ins = p ? *(uint32_t *)p : 0xFFFFFFFFu;
+            fprintf(stderr, "TRC pc=%x npc=%x ins=%08x t1=%x t2=%x ra=%x\n",
+                    c.pc, c.npc, ins, c.gpr[8], c.gpr[9], c.gpr[31]);
+            psx_cpu_step(&c);
+        }
+    } else psx_cpu_run(&c, 64);
+    uint32_t m1 = 0, m2 = 0;
+    { uint32_t w; void *p = psx_translate(&core, 0x80123454u, &w); if (p) memcpy(&m1, p, 4);
+      p = psx_translate(&core, 0x80123458u, &w); if (p) memcpy(&m2, p, 4); }
+    BOOTCHK(h.nlog == n0 + 1u && h.last_vec == 0xA0u && h.last_cmd == 0x3Cu, "b3_putchar_via_kernel");
+    BOOTCHK(m1 == 1u && m2 == 0x5Au, "b4_marker_ram");
+    BOOTCHK(c.pc == C + 0x38 || c.npc == C + 0x3C, "b5_pc_in_loop");
+    BOOTCHK(h.armed == 1 && h.exe_pc == C, "b6_execute_armed");
+    /* b7 数据段装载证据: 0x80040000 图案 */
+    { uint32_t dv = 0, w; void *p = psx_translate(&core, 0x80040000u, &w); if (p) memcpy(&dv, p, 4);
+      BOOTCHK(dv == 0xABCD0000u, "b7_data_extent_loaded"); }
+    printf("BOOT_EV bad=%d pc=%x npc=%x nlog=%u exc=%u cause=%x epc=%x badv=%x g8=%x g9=%x g31=%x\n", bad, c.pc, c.npc, h.nlog, c.exc_n, c.cop0[13], c.cop0[14], c.cop0[8], c.gpr[8], c.gpr[9], c.gpr[31]);
+    psx_disc_close(&disc); psx_core_free(&core);
+    if (bad) { printf("BOOT SELFTEST FAIL (%d)\n", bad); return 1; }
+    printf("BOOT CORE SELFTEST PASS\n");
+    return 0;
+}
+
 /* ---------- --hle-selftest (task-129 验收面) ---------- */
 #define EM(a, v) *(volatile uint32_t *)(uintptr_t)(a) = (v)
 #define RDW(a)   (*(volatile uint32_t *)(uintptr_t)(a))
@@ -516,7 +642,7 @@ int cmd_hle_selftest(int argc, char **argv)
                 hle_go(&c, 0xA0u, 0x04u, P); c.gpr[4] = fd; psx_cpu_run(&c, 3); uint32_t cr = c.gpr[2];
                 uint32_t pc2 = 0; memcpy(&pc2, (void *)(uintptr_t)(E + 0x2000u + 0x10u), 4);
                 HCHK(fd == 0x1100u && got == 0x800u && lp == 0x10u && cr == 0u &&
-                     pc2 == 0x80040010u, "v16_file_api_open_read");
+                     pc2 == 0x80041000u, "v16_file_api_open_read");
                 psx_disc_close(&disc);
             } else HCHK(0, "v16_file_api_open_read");
             free(img);
