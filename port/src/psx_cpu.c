@@ -36,7 +36,8 @@ static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int stor
     if (gpa % sz) { enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
     uint32_t w;
     void *p = psx_translate(c->core, gpa, &w);
-    if (!p || w == PSX_WIN_BAD) { enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
+    if (!p || w == PSX_WIN_BAD) {
+        enter_exception(c, store ? 5u : 4u, gpa, 1); return -1; }
     /* 楔7b 转正: cache-maintenance 写弃默认 ON——SCPH1001 维护循环
      * (pc 0xBFC01940-0x1A40, 16B 步距扫 D-cache index 空间 [0,0xF80))对
      * RAM 低页的写 = 真机 cache 层行为, 不毁 RAM 向量(golden stub 存活铁证);
@@ -104,7 +105,7 @@ static int irq_check(psx_cpu_t *c)
     if (!d) return 0;
     uint32_t st = c->cop0[12];
     if (!(st & 1u) || (st & 2u)) return 0;
-    if (!(d->i_stat & d->i_mask & 0x1FFFu)) return 0;
+    if (!(d->i_stat & d->i_mask & 0x3FFFu)) return 0;   /* 0-9 KSEG 源 + 10-13 T0-T3 (task-135: 0x1FFF 漏 T3 位) */
     c->cop0[14] = c->npc;                 /* epc = 未执行指令 */
     c->cop0[13] = (1u << 8);              /* cause: IP8(bit8), ExCode=0 中断 */
     c->cop0[12] |= 2u;
@@ -121,7 +122,7 @@ int psx_cpu_step(psx_cpu_t *c)
     if (irq_check(c)) { c->cycles++; return 0; }
     uint32_t insn;
     void *fp;
-    if (mem_rw(c, c->npc, &fp, 4, 0) != 0) return -1;   /* ibus/对齐 → 地址错 */
+    if (mem_rw(c, c->npc, &fp, 4, 0) != 0) return -1;
     insn = *(uint32_t *)fp;
 
     uint32_t pend = c->branch_pending, ptarget = c->branch_target;
@@ -147,9 +148,39 @@ int psx_cpu_step(psx_cpu_t *c)
         case 0x09: SETG(rd ? rd : 31, c->npc); took = 1; tgt = G(rs); break; /* jalr */
         case 0x0A: if (G(rt) == 0) SETG(rd, G(rs)); break;          /* movz */
         case 0x0B: if (G(rt) != 0) SETG(rd, G(rs)); break;          /* movn */
-        case 0x0C:                                              /* syscall */
-            if (c->on_rootcall && c->on_rootcall(c) == 1) break; /* HLE 已服务=普通指令续跑(cycles 走尾部簿记) */
+        case 0x0C: {                                             /* syscall */
+            uint32_t code = (insn >> 6) & 0xFFFFu;               /* MIPS SYSCALL 立即数=bits21-6 (PSYQ: syscall 0x40 → 0x0000100C; task-141 正字) */
+            c->syscall_code = code;
+
+            /* BIOS 几何 [psx-spx]: code 0x20-0x3F InstallHandler 向量优先于 $t2 分派 */
+            int vec_done = 0;
+            if (code >= 0x20u && code <= 0x3Fu && c->core && c->core->dev) {
+                psx_dev_t *d = (psx_dev_t *)c->core->dev;
+                uint32_t hv = d->sysvec[code - 0x20u];
+                if (hv) { vec_done = 1;
+                          c->gpr[31] = c->npc; c->pc = c->npc - 4u; c->npc = hv;
+                          c->branch_pending = 0; }
+            }
+            if (!vec_done && c->on_rootcall && c->on_rootcall(c) == 1) break; /* HLE 已服务=普通指令续跑 */
+            if (!vec_done && code >= 0x20u && code <= 0x3Fu) break; /* 空向量=nop 等价 (BIOS 未装同型) */
+            /* 向量页 stub 自噬守卫: pc∈页 且 code 族选择器与 $t2 不合 = 游戏改写页
+             * (InitGeom 系写 syscall 0x40/0x48/0x4C 进 0xA0/B0/C0) → nop 续, 防 0x80 死环 */
+            if (!vec_done && (c->pc & 0x1FFFFFFFu) < 0x100u) {   /* KSEG0/USEG 别名同判 */
+                if (code == 0u) break;
+                uint32_t fam = (code >= 0x40u && code <= 0x4Fu) ? (0xA0u + ((code - 0x40u) / 4u) * 0x10u) : 0u;
+                if (fam != 0u && fam != c->gpr[10]) break;
+            }
+            if (0) {
+                psx_dev_t *d = (psx_dev_t *)c->core->dev;
+                uint32_t h = d->sysvec[code - 0x20u];
+                c->cycles++;
+                if (h) { c->gpr[31] = c->npc; c->pc = c->npc - 4u; c->npc = h;
+                         c->branch_pending = 0; }
+                else { c->pc = c->npc - 4u; c->npc += 4u; }   /* 空向量=nop 等价 */
+                return 0;
+            }
             enter_exception(c, 8u, 0, 0); c->cycles++; return 0;
+        }
         case 0x0D: enter_exception(c, 9u, 0, 0); c->cycles++; return 0;  /* break */
         case 0x10: SETG(rd, c->hi); break;                          /* mfhi */
         case 0x11: c->hi = G(rs); break;                            /* mthi */

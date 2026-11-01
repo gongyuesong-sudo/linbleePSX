@@ -17,6 +17,8 @@
 typedef struct psx_dev_s {
     /* IRQ (docs/57) */
     uint32_t i_mask;            /* 0x1F801074 */
+    uint32_t vframes;           /* task-135 帧节拍注入计数 */
+    uint32_t sysvec[0x20];      /* InstallHandler 向量表 (syscall code 0x20-0x3F) */
     uint32_t i_stat;            /* 0x1F801070 写 AND 清 */
     uint32_t istat_reads;       /* EVTGEN 节拍计数 */
     /* 楔8b-① CDROM 驱动器最小面(0x1F801820-27): 上电复位 ACK + 命令 state machine
@@ -62,6 +64,9 @@ void     psx_dev_trace_dump(int topn);
 int      cmd_dev_selftest(int argc, char **argv);
 /* 清洁房楔5: GPU 附着 (GP0/GP1 口转发) */
 void     psx_dev_gpu_attach(void *dev, void *gpu);
+/* 帧节拍注入 (task-135): 真机 VBlank 源 = I_STAT bit0 置位 (IRQ 链走 irq_check)
+ * + 四路 33.87MHz/4 计数器粗步长推进 (v1 仅根节拍, 精确分频后续楔) */
+void     psx_dev_vframe(psx_dev_t *d);
 /* 清洁房楔3: 盘装载附着 + 集成探针 (psx_cdrom selftest 消费; 0=PASS) */
 void     psx_dev_cd_attach(psx_dev_t *d, void *disc /* psx_disc_t* */);
 int      psx_cd_dev_integration_probe(void);

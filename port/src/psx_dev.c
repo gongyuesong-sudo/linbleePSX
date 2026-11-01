@@ -75,25 +75,38 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
         d->phase104a++;
         return (1u << ph) | (d->reg1044 & 0x100u ? 0x100u : 0u);
     }
-    case 0x1100: case 0x1110: case 0x1120: case 0x1130: { /* Timer cnt 读推进 M1 */
+    case 0x1100: case 0x1110: case 0x1120: case 0x1130: { /* Timer cnt (task-135 全语义 M2):
+        enable 才走; target 模式(bit7=0)达 target 归零+IRQ; wrap 模式(bit7=1)0xFFFF 回绕+IRQ;
+        IRQ 置位受 ctrl bit6 门 (psx-spx 公开位义) */
         int t = (off - 0x1100) / 0x10;
-        uint32_t v = d->timer_cnt[t];
-        d->timer_cnt[t] = (v + PSX_TIMER_ADV) & 0xFFFFu;   /* 16 位计数域 */
+        uint32_t v = d->timer_cnt[t];                          /* 真机=读瞬时值 */
+        uint32_t c = d->timer_ctrl[t];
+        if (c & 1u) {
+            uint32_t nv = v + PSX_TIMER_ADV;
+            if (c & 0x80u) {                                   /* 0xFFFF wrap 模式 */
+                if (nv > 0xFFFFu) { nv = 0u; if (c & 0x40u) d->i_stat |= (1u << (10 + t)); }
+            } else {                                           /* target 比较模式 */
+                if (nv >= d->timer_target[t] || nv > 0xFFFFu) {
+                    nv = 0u; if (c & 0x40u) d->i_stat |= (1u << (10 + t));
+                }
+            }
+            d->timer_cnt[t] = nv & 0xFFFFu;
+        }
         return v;
     }
     case 0x1104: case 0x1114: case 0x1124: case 0x1134:
         return d->timer_ctrl[(off - 0x1104) / 0x10];
     case 0x1108: case 0x1118: case 0x1128: case 0x1138:
         return d->timer_target[(off - 0x1108) / 0x10];
-    case 0x1800: { /* GP0 读=pop FIFO */
-        if (d->gp0_n == 0) return 0u;
-        uint32_t v = d->gp0_fifo[d->gp0_rp];
-        d->gp0_rp = (d->gp0_rp + 1) & 3; d->gp0_n--;
-        return v;
-    }
-    case 0x1808: return d->gp0_n ? d->gp0_fifo[d->gp0_rp] : 0u; /* GPUDATA 顶不 pop */
-    case 0x1804: return d->gp1_last;
-    case 0x1810: return 0xB0000000u | (d->gp0_n < 4 ? (1u << 24) : 0u); /* docs/57 GPUOK 真值 */
+    case 0x1800: case 0x1810: case 0x1808:
+        return 0u;   /* GPUREAD 正字(no$psx 1F801800/1810/1808 读=GPU 读响应 FIFO):
+                      * v1 无 GpuRead 响应建模 → 恒 0; 绝不动命令 FIFO (task-141 正字:
+                      * 旧 pop 模型会把游戏 GP0 命令流吞掉) */
+    case 0x1804: return d->gp1_last;   /* 兼容旧自造面 */
+    case 0x1814: return (d->gp0_n < 4 ? (1u << 24) : 0u) | (1u<<26) | (1u<<28) | (1u<<12);
+                                /* GPUSTAT 正字(no$psx 1F801814 读): bit24 ready-cmd, bit26 ready-VRAM,
+                                 * bit28 ready-DMA-block, bit12 DMA active=0 面; 同步光栅器恒就绪 */
+    case 0x181C: return 0u;   /* GPU ACK: 无错 */
     default: return 0;
     }
 }
@@ -133,12 +146,11 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
         d->timer_target[(off - 0x1108) / 0x10] = val; break;
     case 0x1100: case 0x1110: case 0x1120: case 0x1130:
         d->timer_cnt[(off - 0x1100) / 0x10] = val & 0xFFFFu; break;
-    case 0x1800:                                        /* GP0 push 深 4 满丢弃 */
+    case 0x1810: case 0x1800:                            /* GP0 push (no$psx 正字 1F801810; 0x1800=旧自造兼容) 深 4 满丢弃 */
         if (d->gp0_n < 4) { d->gp0_fifo[d->gp0_wp] = val;
-            d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
+                            d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
         if (d->gpu) gpu_gp0_fwd(d->gpu, val);            /* 楔5: 消费者转发 */
-        break;
-    case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;
+        break;    case 0x1814: case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;  /* GP1 正字 1F801814 */
     default: break;
     }
 }
@@ -151,6 +163,13 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
 void psx_dev_cd_attach(psx_dev_t *d, void *disc) { d->disc = disc; }
 static void gpu_gp0_fwd(void *g, uint32_t w) { psx_gpu_gp0((psx_gpu_t *)g, w); }
 static void gpu_gp1_fwd(void *g, uint32_t w) { psx_gpu_gp1((psx_gpu_t *)g, w); }
+void psx_dev_vframe(psx_dev_t *d)
+{
+    if (!d) return;
+    d->i_stat |= 0x1u;      /* VBlank (bit0 正字, 楔8b-2 定案) */
+    d->vframes++;
+}
+
 void psx_dev_gpu_attach(void *dev, void *gpu) { ((psx_dev_t *)dev)->gpu = gpu; }
 
 static void cd_push(psx_dev_t *d, uint8_t b)
@@ -283,11 +302,21 @@ int cmd_dev_selftest(int argc, char **argv)
      * 实验记录: 单改 bit0 不解锁 idle 主序(等待条件=复合, GPU/DMA 大楔议题) */
     DCHK(!before && (dev.i_stat & 1u) != 0, "evtgen_64read_vblank_bit0");
 
-    /* 3. Timer 读推进 0x400 16 位域 (docs/63 M1) */
+    /* 3. Timer M2 全语义 (task-135): enable 门 + wrap 模式(0xFFFF→0) + target IRQ 门 */
+    dev.timer_ctrl[2] = 0x81u;                      /* enable + wrap 模式, IRQ 关 */
     dev.timer_cnt[2] = 0xFE00u;
+    dev.i_stat &= ~(1u << 12);                      /* 初值 0x1220 含 bit12, 差值面自清 */
     uint32_t a = psx_dev_read(&dev, 0x1120, 4);
-    uint32_t b = psx_dev_read(&dev, 0x1120, 4);
-    DCHK(a == 0xFE00u && b == 0x0200u, "timer2_advance_wrap16");
+    uint32_t b = psx_dev_read(&dev, 0x1120, 4);     /* 0xFE00+0x400 越界 → 归零 */
+    DCHK(a == 0xFE00u && b == 0u && (dev.i_stat & (1u<<12)) == 0u, "timer2_wrap_mode");
+    dev.timer_ctrl[2] = 0x41u;                      /* enable + target 模式 + IRQ on */
+    dev.timer_target[2] = 0x0300u; dev.timer_cnt[2] = 0x0100u;
+    dev.i_stat &= ~(1u << 12);
+    (void)psx_dev_read(&dev, 0x1120, 4);            /* 0x0500 ≥ target → 归零+IRQ */
+    DCHK(dev.timer_cnt[2] == 0u && (dev.i_stat & (1u<<12)) != 0u, "timer2_target_irq");
+    dev.timer_ctrl[2] = 0u; dev.timer_cnt[2] = 0x5555u;   /* disable 不走 */
+    DCHK(psx_dev_read(&dev, 0x1120, 4) == 0x5555u && dev.timer_cnt[2] == 0x5555u,
+         "timer2_disabled_frozen");
 
     /* 4. C2 握手窗 1044/104A 双相位 (docs/62) */
     dev.phase104a = 0;
@@ -308,17 +337,18 @@ int cmd_dev_selftest(int argc, char **argv)
          (cst & 0x18u) == 0x18u && (dev.i_stat & 4u) != 0u && dev.cd_cmds == 1u,
          "cdrom_getstat_nodisc_F1");
 
-    /* 5. GPU GP0 FIFO push/pop + GPUOK (docs/57 真值) */
-    psx_dev_write(&dev, 0x1800, 0xE6000400u, 4);        /* E0(显存写命令) */
-    psx_dev_write(&dev, 0x1800, 0x00001234u, 4);        /* 参数 */
-    psx_dev_write(&dev, 0x1800, 0xFFFFFFFFu, 4);
-    psx_dev_write(&dev, 0x1800, 0xFFFFFFFFu, 4);
-    psx_dev_write(&dev, 0x1800, 0xDEADBEEFu, 4);        /* 第 5 个=满丢弃 */
-    uint32_t g1 = psx_dev_read(&dev, 0x1800, 4);
-    uint32_t st = psx_dev_read(&dev, 0x1810, 4);
-    DCHK(g1 == 0xE6000400u && dev.gp0_n == 3 &&
-         (st & 0xF0000000u) == 0xB0000000u && (st & 0x01000000u),
-         "gpu_gp0_fifo4_gpuok_b0000000");
+    /* 5. GPU GP0 正字口 + GPUSTAT 正字 (task-141: GP0 写=1F801810, STAT 读=1F801814,
+     * GPUREAD 不吞命令流, 满丢弃面) */
+    psx_dev_write(&dev, 0x1810, 0xE6000400u, 4);        /* E0(显存写命令) */
+    psx_dev_write(&dev, 0x1810, 0x00001234u, 4);        /* 参数 */
+    psx_dev_write(&dev, 0x1810, 0xFFFFFFFFu, 4);
+    psx_dev_write(&dev, 0x1810, 0xFFFFFFFFu, 4);
+    psx_dev_write(&dev, 0x1810, 0xDEADBEEFu, 4);        /* 第 5 个=满丢弃(转发仍全量) */
+    uint32_t gr = psx_dev_read(&dev, 0x1810, 4);        /* GPUREAD=0, 不动命令 FIFO */
+    uint32_t st = psx_dev_read(&dev, 0x1814, 4);        /* GPUSTAT 正字 */
+    DCHK(gr == 0u && dev.gp0_n == 4 &&
+         (st & (1u<<26)) && (st & (1u<<28)) && (st & (1u<<24)) == 0u,
+         "gpu_gp0_port1810_gpustat1814");
 
     /* 6. CPU→dev 联动: guest sw 写 I_MASK, lw 读回 I_STAT 触发 EVTGEN 计数 */
     psx_cpu_t c; psx_cpu_reset(&c, &core);
