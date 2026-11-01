@@ -597,3 +597,14 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   → 设备 CB 链路**游戏侧本身已通**; 默认门真空的唯一外部门仍是 ISR-active
   [50C2]=0(楔33)——转正方向 = 在 VBlank 派发入口面置 [50C2]=1(等价 BIOS
   EntryInt 置位), 非再找 CB 注册缺口。楔36 = [50C2] 置位转正 + 八面回归。
+
+## 楔36 (SESSION-175): **ISR-active [50C2] 转正** — 默认门主泵自由跑
+- 转正面: VBlank 派发入口等价真机 BIOS EntryInt 置 `[50C2]=1`(游戏 VBlankIntCB
+  8005202C 退出清零, 语义闭环)。双防误伤门(楔35 装机证据): HookEntryInt 指针槽
+  `[50F8]` 合法 RAM 指针 **且** 分发器 `[50C4]` 合法指针, 二者齐才写; `RETAIL_ISR50C2=0` 显式关。
+- 默认门北斗: **泵首次自由跑** — 50M vframes=89→200M vframes=355; pc 进 GPU
+  sync 深段 `8005090C`; **gp0=4 gp1=2 首次 nonzero**(渲染口开始有字); fill/tri=0 待渲染体。
+- 新单点楔37: 单次 `exc cause=20 epc=8004F458 ins=0000000c(syscall) t1=0x35 t2=0xB0
+  ra=80051164` = B0:0x35 rootcall 走入异常面(非 served 路); 修后 GPU 命令流望续涨。
+- 回归: 八面 8/8 PASS; 三国志2/NBA/Striker 30M exc=0 零误伤, Striker pc 前移至 80169760。
+- port commit 见 git log; mirror 同步 ahead=0。
