@@ -949,7 +949,7 @@ int cmd_retail_probe(int argc, char **argv)
                    psx_core_free(&core); return 1; }
     psx_dev_init(&dev); core.dev = &dev; h.dev = &dev;
     psx_dev_trace_reset();
-    psx_gpu_init(&gpu); psx_dev_gpu_attach(&dev, &gpu); psx_dev_cd_attach(&dev, &d);
+    psx_gpu_init(&gpu); psx_gpu_attach_core(&gpu, &core); psx_dev_gpu_attach(&dev, &gpu); psx_dev_cd_attach(&dev, &d);
     psx_dev_core_attach(&dev, &core);   /* task-145: DMA 执行需 RAM 翻译 */
     printf("RETAIL_PROBE boot=%s entry=%08x sp=%08x gp=%08x\n",
            d.files[psx_disc_boot_exe(&d, 0, 0)].name, entry, cpu.gpr[29], cpu.gpr[28]);
@@ -1179,6 +1179,11 @@ int cmd_retail_probe(int argc, char **argv)
                       fclose(df); printf("DUMPHOT %s base=%08x\n", fname, base); }
         }
     }
+    { extern void gp0_trace_dump(void); gp0_trace_dump(); }
+    { extern unsigned g_gp0_hist[8];
+      printf("RETAIL_PROBE gp0hist: f0=%u f1=%u f2=%u f3=%u f4=%u f5=%u f6=%u f7=%u disp=%x\n",
+             g_gp0_hist[0], g_gp0_hist[1], g_gp0_hist[2], g_gp0_hist[3],
+             g_gp0_hist[4], g_gp0_hist[5], g_gp0_hist[6], g_gp0_hist[7], gpu.disp_on); }
     printf("RETAIL_PROBE gpu vframes=%u gp_ticks=%u gp0=%u gp1=%u fill=%u xfer=%u tri=%u spr=%u\n",
            dev.vframes, gpu.frames, gpu.gp0_words, gpu.gp1_words, gpu.fill_px, gpu.xfer_px, gpu.tri_px, gpu.spr_px);
     for (int z = 0; z < 48; z++) if (h.unk[z].cnt)

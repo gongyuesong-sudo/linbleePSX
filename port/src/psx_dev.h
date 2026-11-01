@@ -44,9 +44,13 @@ typedef struct psx_dev_s {
     uint32_t reg1044;
     uint32_t spu_fifo, spu_stat, spu_xfer;  /* SPU 传输面 v1 (task-143) */
     uint32_t dma_madr[7], dma_bcr[7], dma_chcr[7];  /* DMA 通道寄存器组 (task-145) */
+    uint32_t cd_lba, cd_read_pending;               /* CDROM 读流 (task-148): ReadN 起读 LBA + 已载扇区数 */
+    uint8_t  cd_secbuf[2048];                       /* 最近一扇区数据缓冲 */
     void    *core;                                  /* DMA 执行需 RAM 翻译 (attach 挂) */
-    uint32_t sh[0x100];   /* 0x000-0x3FF / 0x1000-0x10FF 影子存值回读面: 未建模寄存器
-                           * 读写可回读(v1 诚实面; task-143 DMA 全局口 0x10F0 实证) */
+    uint32_t sh[0x4000];  /* 全 64KB MMIO 影子回读面 (task-148): 未建模寄存器读=最后写值
+                           * (真机控制字 RMW 语义; SPU 0x1C00+ 握手循环实证, 旧 0x400 覆盖不足
+                           * 致 SPU 控制字写完读不回 → RMW 死等超时)。已建模口(定时器/CDROM/
+                           * IRQ/GPU)在 default 前有显式 case 不受影响 */
     uint32_t phase104a;         /* 双相位: 0→bit0, 1→bit1, 循环 */
     void    *gpu;               /* 清洁房楔5: psx_gpu_t* (GP0/GP1 口转发, NULL=观测面) */
     /* GPU (docs/39 端口族): GP0 FIFO 深 4 */

@@ -108,10 +108,7 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
                                 /* GPUSTAT 正字(no$psx 1F801814 读): bit24 ready-cmd, bit26 ready-VRAM,
                                  * bit28 ready-DMA-block, bit12 DMA active=0 面; 同步光栅器恒就绪 */
     case 0x181C: return 0u;   /* GPU ACK: 无错 */
-    case 0x1DA8: return 0u;                        /* SPU FIFO 读=0 */
-    case 0x1DAA: return 0x400u | (d->spu_stat & ~0x400u); /* bit10=传输缓冲空(恒就绪) */
-    case 0x1DAC: return 0u;                        /* IRQ 状态: 无待中断 */
-    case 0x1DAE: return d->spu_xfer | 0x400u;      /* 传输完成位恒置 */
+    /* SPU 0x1DA4-0x1DAF: task-148 撤专案 → 落全 MMIO 影子回读面(控制字 RMW 语义) */
     case 0x000: case 0x010: case 0x020: case 0x030:
     case 0x040: case 0x050: case 0x060: return d->dma_madr[off / 0x10];
     case 0x004: case 0x014: case 0x024: case 0x034:
@@ -119,7 +116,7 @@ uint32_t psx_dev_read(psx_dev_t *d, uint32_t off, int size)
     case 0x008: case 0x018: case 0x028: case 0x038:
     case 0x048: case 0x058: case 0x068: return d->dma_chcr[(off - 0x008) / 0x10];
     default:
-        if (off < 0x400u) return d->sh[off / 4];
+        if (off < 0x10000u) return d->sh[off / 4];
         return 0;
     }
 }
@@ -164,12 +161,9 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
                             d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
         if (d->gpu) gpu_gp0_fwd(d->gpu, val);            /* 楔5: 消费者转发 */
         break;    case 0x1814: case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;  /* GP1 正字 1F801814 */
-    /* SPU 传输面 (task-143 真盘静态反汇编钉字: 解包器半字拷流写 0x1DA8 FIFO,
-     * 轮询 0x1DAA/0x1DAE 状态; no$psx SPU 窗 0x1F801C00-0x1F801DFF):
-     * 传输完成位(bit10)恒就绪 = 同步吸收语义; 0x1DAA 回读=最后写值(握手面)。 */
-    case 0x1DA8: d->spu_fifo = val & 0xFFFFu; break;           /* 声样半字入 FIFO: 吸收 */
-    case 0x1DAA: d->spu_stat = val & 0xFFFFu; break;           /* 控制字存值可回读 */
-    case 0x1DAE: d->spu_xfer = val; break;                     /* 传输基址/计数存值 */
+    /* SPU 控制面 (task-148 定案): 0x1C00-0x1DFF 区不做专案, 全落 64KB 影子回读面
+     * ——真机 SPU 控制字可读回, 游戏做 lhu/ori/sh RMW 握手(北斗神拳 80058b94 实证:
+     * 写 [0x1aa]|0x30 后轮询 [0x1aa]&0x30), 专案截胡致写读不一致 → 死等超时。 */
     /* DMA 通道 (no$psx 正字): D0-D6=0x00-0x6F (10/通道: MADR/BCR/CHCR/res),
      * 全局=0xF0-0xFC。写 CHCR(bit30 使能 & bit28 触发)= 立即执行块传输并清
      * bit28 —— 游戏轮询 bit28=0 判完成; 影子面旧行为(存 1 不清)=永久等待
@@ -180,7 +174,25 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
         int ch = (int)((off - 0x008) / 0x10);
         d->dma_chcr[ch] = val;
         if ((val & 0x40000000u) && (val & 0x10000000u)) {   /* enable+trigger */
-            if (ch == 2 && (val & (1u << 25)) && d->gpu && d->core) {  /* GPU C->V */
+            if (ch == 3 && !(val & (1u << 25)) && d->core) {   /* CDROM->RAM (task-148):
+                * 真盘 PSYQ 读盘闭环 = ReadN 装填 cd_sect → DMA3 写 MADR → 清 CHCR bit28
+                * → 置 I_STAT bit2(CDINT) 唤醒等待线程(80051b3c bne 死等闭环)。 */
+                uint32_t madr = d->dma_madr[3] & 0x1FFFFFu;
+                uint32_t blk  = d->dma_bcr[3];
+                uint32_t sects = (blk >> 16) & 0xFFFFu; if (!sects) sects = 1u;
+                uint32_t bps   = blk & 0xFFFFu;         if (!bps)  bps = 2048u;
+                uint32_t total = sects * bps; if (total > 0x20000u) total = 0x20000u;
+                for (uint32_t z = 0; z < total; z += 4u) {
+                    uint32_t ww4;
+                    void *q = psx_translate((const psx_core_t *)d->core,
+                                            0x80000000u + ((madr + z) & 0x1FFFFFu), &ww4);
+                    if (!q) break;
+                    uint32_t src = z < 2048u ? ((uint32_t *)d->cd_sect)[z / 4u]
+                                             : 0u;   /* CDDA/超区=零扇区(诚实面) */
+                    *(uint32_t *)q = src;
+                }
+                d->i_stat |= 0x4u;                    /* CDINT (I_STAT bit2 正字) */
+            } else if (ch == 2 && (val & (1u << 25)) && d->gpu && d->core) {  /* GPU C->V */
                 uint32_t madr = d->dma_madr[2] & 0x1FFFFFu;
                 uint32_t n = d->dma_bcr[2] & 0xFFFFu;       /* v1: 低 16 位=字数 */
                 if (n > 0x4000u) n = 0x4000u;
@@ -204,7 +216,7 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
         int ch = (int)((off - 0x004) / 0x10); d->dma_bcr[ch] = val; break;
     }
     default:
-        if (off < 0x400u) { d->sh[off / 4] = val; break; }
+        if (off < 0x10000u) { d->sh[off / 4] = val; break; }
         break;
     }
 }

@@ -35,6 +35,7 @@ typedef struct psx_gpu_s {
     uint32_t gp0_words, gp1_words, fill_px, xfer_px, tri_px, spr_px;
     uint32_t frames;
     int      raw_mode;            /* E1 位25: 原始纹理(数据流内联) —— v1 契约登记 */
+    void    *core;                /* psx_core_t* (task-148: OTZ GPU 端 fetch) */
     void    *hw_ctx;              /* Vulkan 硬件扫描通道上下文 (vk_host*) */
     int    (*hw_present)(void *ctx, struct psx_gpu_s *g);
     /* 帧缓冲 */
@@ -48,6 +49,7 @@ void psx_gpu_gp0(psx_gpu_t *g, uint32_t word);   /* GP0 命令/数据口 (0x1F80
 void psx_gpu_gp1(psx_gpu_t *g, uint32_t word);   /* GP1 控制口 (0x1F801804) */
 void psx_gpu_tick(psx_gpu_t *g);                 /* VRAM→fb 一帧 */
 /* 硬件扫描通道附着 (present 回调在 tick 尾部消费 VRAM 16bpp) */
+void psx_gpu_attach_core(void *g, void *core);
 void psx_gpu_attach_hw(struct psx_gpu_s *g, void *ctx, int (*present)(void *, struct psx_gpu_s *));
 /* 子命令入口: 0=PASS */
 int  cmd_gpu_selftest(int argc, char **argv);

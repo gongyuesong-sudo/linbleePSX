@@ -16,6 +16,7 @@
  * (psx_gpu_scanout_spv.h → vk_host_present_gpu16: 上载→设备端 5551→RGBA8→blit)。
  */
 #include "psx_gpu.h"
+#include "psx_core.h"
 #include "psx_dev.h"
 #include <stdio.h>
 #include <time.h>
@@ -201,9 +202,14 @@ static void xfer_exec(psx_gpu_t *g)
 
 static int rect_dw(int w, int hh) { return w * hh / 2; }
 
+unsigned g_gp0_hist[8];                      /* task-148: 命令族直方图(观测面) */
 void psx_gpu_gp0(psx_gpu_t *g, uint32_t w)
 {
     g->gp0_words++;
+    if (pk.data_words == 0) g_gp0_hist[(w >> 29) & 7u]++;   /* 仅命令头计数 */
+    { extern void gp0_trace_word(uint32_t w); 
+      extern int g_gpu_wordtrace_n;
+      if (g_gpu_wordtrace_n < 40 && (w >> 26) != 0x3Fu) { gp0_trace_word(w); } }
     if (pk.data_words > 0) {                              /* 数据流相位 */
         if (pk.wn < PKT_CAP) pk.buf[pk.wn++] = w;
         if (--pk.data_words == 0) {
@@ -250,7 +256,29 @@ void psx_gpu_gp0(psx_gpu_t *g, uint32_t w)
     switch (fam) {
     case 0:
         if (op8 == 0x02) { pk.family = 0; pk.need_hdr = 2; }
-        break;                                            /* 0x1F/NOP 观测 */
+        else {   /* OTZ 表头 (真盘主命令形态, task-148): bits0-25=下一命令缓冲地址,
+                  * bits26-29=z。GPU 端 fetch: 从该地址读命令字重派发(深度护栏防环)。 */
+            /* OTZ 链 = GPU 内建链表遍历: 沿链找第一枚真命令(非 OTZ 头)。
+             * 环检测 = 访问地址去重(32 槽窗口足够: 真表零命令时链短; 环=立即停)。
+             * 深度上限 4096 = OT 槽数上限。 */
+            /* GPU 正字: OTZ 低 26 位 = **VRAM 地址**(半字粒度)。Psy-Q 经典流 =
+             * 命令块直写 VRAM(0xA0 传输), FIFO 只送 OTZ 链 → 本核从 VRAM 沿链吃:
+             * 命令头→按包宽推进→下一 OTZ→…直到 0xFF000064 terminator(本表尾)。*/
+            uint32_t vram_half = w & 0x03FFFFFFu;
+            static int otz_busy = 0;
+            if ((vram_half >> 1) < (1024u * 512u) && otz_busy < 512) {
+                uint16_t *vp = &g->vram[0];   /* VRAM 16bpp 字数组(半字/2) */
+                uint32_t vi = (vram_half >> 1) & ((1024u * 512u) - 1u);
+                uint32_t cmd = (uint32_t)vp[vi] | ((uint32_t)vp[vi + 1] << 16);
+                if (cmd != 0u) {
+                    otz_busy++;
+                    psx_gpu_gp0(g, cmd);
+                    if ((cmd >> 24) == 0xFFu) { /* terminator: 本 OT 表结束 */ }
+                    otz_busy--;
+                }
+            }
+        }
+        return;
     case 1:
         pk.family = 1; pk.n = ((w >> 27) & 1) ? 4 : 3;
         pk.gouraud = (int)((w >> 28) & 1); pk.textured = (int)((w >> 26) & 1);
@@ -266,6 +294,7 @@ void psx_gpu_gp0(psx_gpu_t *g, uint32_t w)
         pk.family = 5; pk.need_hdr = 2; break;
     case 7:
         switch (op8) {
+        case 0xFF: return;   /* Terminator(OT 表尾, task-148 真盘 OTZW 实证) */
         case 0xE1: g->tex_page = w & 0xFFFFFF; g->raw_mode = (int)((w >> 22) & 1u); break; /* v1 契约: 位22=原始纹理(自研 HBEXE ABI, 真机面待游戏 trace 楔对拍) */
         case 0xE2: g->tex_window = w & 0xFFFFFF; break;
         case 0xE3: case 0xE4: break;
@@ -322,6 +351,7 @@ void psx_gpu_tick(psx_gpu_t *g)
     g->frames++;
 }
 
+void psx_gpu_attach_core(void *g, void *core) { ((psx_gpu_t *)g)->core = core; }
 void psx_gpu_attach_hw(psx_gpu_t *g, void *ctx, int (*present)(void *, psx_gpu_t *))
 { g->hw_ctx = ctx; g->hw_present = present; }
 
@@ -524,4 +554,28 @@ int cmd_gpu_selftest(int argc, char **argv)
     if (bad) { printf("GPU SELFTEST FAIL (%d)\n", bad); return 1; }
     printf("GPU CORE SELFTEST PASS\n");
     return 0;
+}
+
+int g_gpu_wordtrace_n = 0;
+uint32_t g_gpu_wordtrace[40];
+static uint32_t g_wt_ring[40]; static int g_wt_i = 0;
+void gp0_trace_word(uint32_t w)
+{
+    g_wt_ring[g_wt_i = (g_wt_i + 1) % 40] = w;
+    if (g_gpu_wordtrace_n < 40) { g_gpu_wordtrace[g_gpu_wordtrace_n++] = w; }
+}
+void gp0_trace_dump(void)
+{
+    for (int z = 0; z < g_gpu_wordtrace_n; z++)
+        fprintf(stderr, "GP0W%02d %08x (top3=%x top2=%x z=%x addr=%x)\n", z, g_gpu_wordtrace[z],
+                g_gpu_wordtrace[z] >> 29, g_gpu_wordtrace[z] >> 30,
+                (g_gpu_wordtrace[z] >> 24) & 0x1F, g_gpu_wordtrace[z] & 0xFFFFFF);
+}
+
+void otz_trace(uint32_t next, uint32_t cmd)
+{
+    extern int g_gpu_wordtrace_n; extern uint32_t g_gpu_wordtrace[40];
+    if (g_gpu_wordtrace_n < 40)
+        fprintf(stderr, "OTZW%02d next=%06x cmd=%08x (fam=%x op8=%02x)\n",
+                g_gpu_wordtrace_n++, next, cmd, cmd >> 29, (cmd >> 24) & 0xFF);
 }
