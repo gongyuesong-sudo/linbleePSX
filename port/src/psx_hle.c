@@ -442,7 +442,7 @@ static uint32_t hc_add_cblk(psx_hle_t *h, uint32_t cmd)
      * 派发预算极小(200 指令)+tramp 振荡即出 = 误伤可控。 */
     for (int q = 0; q < 4; q++) {
         uint32_t cand = A_P(q);
-        if (cand >= 0x80000000u && cand < 0x80200000u && (cand & 3u) == 0u) {
+        if (cand >= 0x80000000u && cand < 0x88000000u && (cand & 3u) == 0u) {
             for (int z = 0; z < 16; z++)
                 if (!h->cb[z].used) {
                     h->cb[z].used = 1; h->cb[z].class_ = A_P(0); h->cb[z].id = A_P(1);
@@ -679,7 +679,7 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
               uint32_t hw; void *ph = psx_translate(h->core, cc->entry_hook & ~3u, &hw);
               uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
               uint32_t target = raw & ~1u;
-              if (raw && target >= 0x80000000u && target < 0x80200000u) {
+              if (raw && target >= 0x80000000u && target < 0x88000000u) {
                   cc->ctx_saved = 1;
                   cc->saved_pc = cc->pc; cc->saved_npc = cc->npc;
                   cc->saved_status = cc->cop0[12]; cc->saved_epc = cc->cop0[14]; cc->saved_cause = cc->cop0[13];
@@ -1138,7 +1138,7 @@ int cmd_retail_probe(int argc, char **argv)
                 char dn[4] = { 'a','b','c','d' };
                 for (int dqi = 0; dqi < 4; dqi++) {
                     uint32_t base = dreg[dqi] & ~3u;
-                    if (base < 0x80000000u || base > 0x80200000u) continue;
+                    if (base < 0x80000000u || base > 0x88000000u) continue;
                     fprintf(stderr, "RT DUMP$%c0:", dn[dqi]);
                     for (int wz = 0; wz < 8; wz++) {
                         void *q3 = psx_translate(&core, base + (uint32_t)wz * 4u, &ww);
@@ -1277,8 +1277,10 @@ int cmd_retail_probe(int argc, char **argv)
                cpu.gpr[8], cpu.gpr[9], cpu.gpr[10], cpu.syscall_code, cpu.gpr[31], cpu.gpr[29]);
         printf("RETAIL_EXC epcw:");
         for (int wz = -3; wz <= 2; wz++) {
-            void *qz = psx_translate(&core, (cpu.cop0[14] & ~3u) + (uint32_t)wz * 4u, &wwz);
-            printf(" %08x", qz ? *(uint32_t*)qz : 0xDEADBEEFu);
+            uint32_t gq = (cpu.cop0[14] & ~3u) + (uint32_t)wz * 4u;
+            void *qz = (gq >= 0x80000000u && gq < 0x88000000u)
+                     ? psx_translate(&core, gq, &wwz) : NULL;
+            printf(" %08x", qz && wwz == PSX_WIN_RAM ? *(uint32_t*)qz : 0xDEADBEEFu);
         }
         printf("\n");
     }

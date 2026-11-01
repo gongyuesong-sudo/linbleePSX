@@ -280,3 +280,13 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   vblank_fire 语义牵连; NBA tick 表写入方 = 未跑到的某 rootcall 回调)。
   下楔: 在 NBA tick 表 [8009A468] 挂 RETAIL_WATCH 写监视, 钉"谁应该写它"。
 - **回归**: 八面 115P/0F; 窗口 hw=1; 零版权纪律未破坏。
+
+## 楔18 (SESSION-156/157): 8MB 物理 RAM 正字 — NBA Live 2003 真 8MB 盘解锁
+- 取证钉字: NBA hook 槽 [0x8008A510]=0x807FFF09 → 根处理器=0x807FFF08=**8MB 顶**(2MB 折叠永丢失); NBA sp=0x807FFED8 实证 8MB 变体盘。
+- 正字: PSX_RAM_ALLOCSZ=0x8000000 (满 8MB, 曾误写 0x400000=4MB → NBA store 0x807FFFF4 宿主段错误 core dump, gdb 现场 rax=0x807FFFF4 钉死); psx_translate RAM 掩码 0x1FFFFF→0x3FFFFFF; 低 2MB 游戏行为完全等价。
+- 宿主面防护: RETAIL_EXC epcw 环 epc=0xFFFFFFF8 地址回绕裸解引用崩溃 → 加 gpa∈[0x80000000,0x88000000) + win==RAM 双门 (诊断面绝不可自杀)。
+- CPU/HLE 跳转守卫 0x80200000→0x88000000 (5 处: psx_cpu.c×2, psx_hle.c×3) = 8MB 镜像面合法目标。
+- 交叉面: NBA 200M 不再钉死 tick(旧 epc fffffff8 风暴消失), 现卡 800577d8 tick 前序初始化(CD_init printk 已出); 北斗神拳 600M 稳定如常 (1063帧, UNK=0, exc=1)。
+- 打击者1945 **翻案**: 旧"200M 零异常 pc=8016cfa0"= 2MB 折叠假死环; 8MB 后突破至 served=82426 深度 rootcall 段, 新卡点 jr $ra→ra=0x801FFFB0(栈) 执行数据字 00000001 → excode10×82417 = 下一楔取证对象 (ra 污染链: 疑 rootcall 返回路径某服务未设 ra)。
+- 八面 115P/0F (psx 折叠断言 xlat_ram_full_mirror_fold/xlat2_bfc8 升 8MB 正字)。
+- 教训: 内存掩码扩容必连带 ①allocs=掩码幅 ②裸指针诊断窗门 ③全部跳转守卫范围; MAP_FIXED_NOREPLACE 保护宿主, 崩溃必是逻辑越界非覆盖。

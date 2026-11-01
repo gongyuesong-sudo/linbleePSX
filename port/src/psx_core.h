@@ -25,7 +25,9 @@
 #define PSX_GPA_RAM_BASE   0x80000000u
 #define PSX_GPA_ROM_BASE   0xBFC00000u
 #define PSX_GPA_MMIO_BASE  0x1F800000u
-#define PSX_RAM_ALLOCSZ    0x328400u /* docs/82 构造器 imm (≈3.2MB)          */
+#define PSX_RAM_ALLOCSZ    0x00800000u /* task-157: PSX 物理满 8MB (低 8MB 镜像面)
+                                          * (旧 ≈3.2MB/2MB 折叠缺 4MB 以上地址 =
+                                          *  8MB 变体盘 NBA Live 2003 等根处理器丢失) */
 #define PSX_MMIO_ALLOCSZ   0x9400u   /* 0x9400 池 (七连 0xC00 子窗)          */
 #define PSX_MMIO_SUBWIN    0xC00u
 #define PSX_BIOS_SIZE      0x80000u  /* BIOS 窗 512KB (楔2, 0xBFC00000 原址) */

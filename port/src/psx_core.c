@@ -191,8 +191,9 @@ void *psx_translate(const psx_core_t *c, uint32_t gpa, uint32_t *win)
         if (c->fixed) { p = (void *)(uintptr_t)gpa; w = PSX_WIN_ROM; }
         else { p = (void *)(uintptr_t)(gpa + c->sb[PSXSB_ROM_DELTA / 4]); w = PSX_WIN_ROM; }
     } else {
-        /* RAM 全镜像: off = gpa & 0x1FFFFF (2MB 物理折叠) */
-        uint32_t off = gpa & 0x1FFFFFu;
+        /* RAM 全镜像: off = gpa & 0x3FFFFFF (task-157: 物理满 8MB;
+         * 低 2MB 折叠行为对 2MB 盘完全等价) */
+        uint32_t off = gpa & 0x3FFFFFFu;
         p = c->fixed ? (void *)(uintptr_t)(PSX_GPA_RAM_BASE + off) : c->ram + off;
         w = PSX_WIN_RAM;
     }
@@ -251,8 +252,8 @@ int cmd_psx_selftest(int argc, char **argv)
     CHK(m1 && m2 && m3 && w == PSX_WIN_MMIO && m1 != m2 &&
         (uint8_t *)m2 >= c.mmio && (uint8_t *)m2 < c.mmio + PSX_MMIO_ALLOCSZ,
         "xlat_mmio_1040_1800_1120");
-    CHK(psx_translate(&c, 0x7FFFFFFFu, &w) == c.ram + 0x1FFFFFu && w == PSX_WIN_RAM,
-        "xlat_ram_full_mirror_fold");
+    CHK(psx_translate(&c, 0x7FFFFFFFu, &w) == c.ram + 0x3FFFFFFu && w == PSX_WIN_RAM,
+        "xlat_ram_full_mirror_fold");   /* task-157: 8MB 物理镜像满幅 */
 
     /* 3. 读写 roundtrip: RAM 主窗写→镜像窗读 / MMIO 寄存器堆 */
     *(uint32_t *)p1 = 0xC0FFEE01u;
@@ -293,8 +294,9 @@ int cmd_psx_selftest(int argc, char **argv)
     CHK(q3 == (void *)(uintptr_t)0xBFC00010u && w == PSX_WIN_ROM, "xlat2_bios_identity");
     void *q4 = psx_translate(&f, 0x1F801040u, &w);
     CHK(q4 == (void *)(uintptr_t)0x1F801040u && w == PSX_WIN_MMIO, "xlat2_mmio_identity");
-    CHK(psx_translate(&f, 0xBFC80000u, &w) == (void *)(uintptr_t)0x80080000u &&
-        w == PSX_WIN_RAM, "xlat2_bfc8_folds_to_ram");  /* BIOS 窗外=RAM 镜像真值 */
+    CHK(psx_translate(&f, 0xBFC80000u, &w) == (void *)(uintptr_t)0x83C80000u &&
+        w == PSX_WIN_RAM, "xlat2_bfc8_folds_to_ram");  /* BIOS 窗外=RAM 镜像真值
+        * (task-157 8MB 幅: 0xBFC80000 & 0x3FFFFFF = 0x3C80000; 旧 2MB wrap=0x80080000) */
     /* 0 别名窗不可直映(mmap_min_addr=64K 禁裸 0x0 段)——原件同址别名在 guest
      * 页表层, Linux 对等=translate 软件别名; 直读仅限已 mmap 的 0x80000000 域 */
     *(uint32_t *)q1 = 0xDEADBEEFu;

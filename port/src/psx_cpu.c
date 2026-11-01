@@ -138,7 +138,7 @@ static int irq_check(psx_cpu_t *c)
         uint32_t hw; void *ph = psx_translate(c->core, c->entry_hook & ~3u, &hw);
         uint32_t raw = ph ? *(const uint32_t *)ph : 0u;
         uint32_t target = raw & ~1u;
-        if (rfe_hw && raw && target >= 0x80000000u && target < 0x80200000u && !c->ctx_saved) {
+        if (rfe_hw && raw && target >= 0x80000000u && target < 0x88000000u && !c->ctx_saved) {
             c->ctx_saved = 1;
             c->saved_pc = c->pc; c->saved_npc = c->npc;
             c->saved_status = c->cop0[12]; c->saved_epc = c->cop0[14]; c->saved_cause = c->cop0[13];
@@ -152,7 +152,7 @@ static int irq_check(psx_cpu_t *c)
             if (g_irqdbg) printf("IRQDBG->RFE %08x (raw=%08x v0=1 帧已存)\n", target, raw);
             return 1;
         }
-        if (raw && target >= 0x80000000u && target < 0x80200000u && c->ctx_saved) {
+        if (raw && target >= 0x80000000u && target < 0x88000000u && c->ctx_saved) {
             if (g_irqdbg) printf("IRQDBG->REENT skip\n");
             return 0;
         }
