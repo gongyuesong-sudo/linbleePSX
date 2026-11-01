@@ -765,3 +765,20 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
 - 楔47 第一步 = 从盘上按真 EXE header 重抽 hok_exe(对照 port 内建 LoadImage
   路径打印的真实 ddst/sz), 重做 live-vs-file 对照, 才许再引"overlay"结论。
   (楔44/45 的"静态零调用者"与本轮"overlay 实锤"**同受此疑**, 标记待复核。)
+
+## 楔47 (SESSION-185): **证据链修复楔** — hok_exe.bin 抽取损坏, 楔44/45/46 静态结论全部作废重做
+- 从盘直读重抽(PVD@16 CD001@+24, root lba22, SLPS_029.93;1 lba23 sz952320):
+  真 header `PS-X EXE PC=8005B744 ddst=80010000 dsz=0xE8000 SP=801FFFF0`;
+  旧 `/tmp/hok_exe.bin`(950272B, header 区垃圾)= **截断/错位抽取**, 已弃,
+  金身 `/tmp/hok_exe_true.bin`。
+- 三门全清: 冷装载即值 vs 真像 @60800 **192/192 全等**; 8M 后亦 **192/192** →
+  **"CD 引擎 overlay"假说作废(该窗未被覆写)**; 楔44/45 "静态零调用者"作废——
+  真像内 CD 引擎有 **14 个 jal 调用者**(5F71x/5FBxx/63Dxx 内核族)。
+- 活体重测: `80060974` state 读=1.04M(热), `80063D88`=695K(被调), 但
+  **issuer `80060A38` 与三个 state 写者 `80060E78/800611C0/80061764` 全零调**;
+  写者上游调用族=60C3C/5F7xx/63D50 内核 dispatch 面。
+- 楔48 单点(新干净基线): 真像静态扫 `[76D9C]` 写族上游全景 + 内核 dispatch
+  残骸(谁调 80060EE0@80060C3C 与 5FB7C 族) —— 即"游戏内核从未走到发 CD 命令
+  那步"的最后一环; 注意后续任何静态证一律用 hok_exe_true.bin。
+- 教训钉: 抽取像必须验 magic(`PS-X EXE`)+header 域合法+size=目录项, 三缺一不配
+  作静态证据源。
