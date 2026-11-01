@@ -32,7 +32,8 @@ typedef struct psx_dev_s {
     uint8_t  cd_param[5];       /* param0(=命令写入字节高 8 位) + param1..4(0x1824-27) */
     uint32_t cd_loc;            /* SetLoc/Seek 目标 (24-bit 域内 LBA) */
     uint8_t  cd_mode;           /* SetMode */
-    uint8_t  cd_sect[2048];     /* ReadN 首扇帧缓冲 (DMA 接线供 task-131) */
+    uint8_t  cd_sect[16*2048];  /* 楔55: ReadN 扇区流缓冲(≤16 扇, 真缺陷修复:
+                                 * 旧=单扇, 8 扇读丢 7) */
     int      cd_sect_valid;
     uint32_t cd_bytes;          /* 最近 ReadN 装载字节数 */
     uint32_t ram_size;          /* 0x1F801060 RAM_SIZE(楔6d: BIOS 写后回读) */

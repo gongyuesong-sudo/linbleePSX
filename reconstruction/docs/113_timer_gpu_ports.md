@@ -912,3 +912,14 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   读盘期望尺寸), 判"多扇区读只落首 2KB"截断缺口(dev DMA3 `src=z<2048` 面)——
   该面 wedge148 注为"CDDA/超区=零扇区(诚实面)", 对**多扇区数据读是语义缺陷**,
   正路=按 sects×bps 逐扇区经 psx_disc_read 真读。
+
+## 楔55 (SESSION-192): 真缺陷修复=ReadN 丢尾扇+DMA3 单扇供给; 爆点再定性=零海滑行
+- **转正修复**: `cd_sect[2048]→[16*2048]` 扇区流; ReadN 旧 `memcpy(tmp→cd_sect,2048)`
+  丢 7/8 尾扇(真缺陷); DMA3 供给 `src = z < cd_bytes`(流内真扇, 超区诚实零)。
+  dev/cd selftest PASS, 八面 8/8, 三盘逐字基线, 默认门北斗零变。
+- 破闸路爆点再定性: gdb 观察点对 `801F0000` "PS-X EXE"字全跑零写入命中 →
+  该字=装载期静态; 主线程实际是**滑进 801E 零海**(0x00000000=nop)直到撞静态字
+  爆非法指令。根因=overlay 载荷从未装载(游戏选 801F0000=2MB 顶附近 scratch,
+  读文件头后其 payload 装载路未产出数据)。
+- 楔56 计划: CALLTR/文件族 rootcall 画像钉 overlay 的 open/read 是否失败
+  (A 族文件口/LIBSN fs 面), 顺验 psx_disc_read 对 overlay 文件的 LBA 解析。

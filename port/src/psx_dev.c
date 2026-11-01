@@ -354,8 +354,8 @@ static void psx_dev_write_i(psx_dev_t *d, uint32_t off, uint32_t val, int size)
                     void *q = psx_translate((const psx_core_t *)d->core,
                                             0x80000000u + ((madr + z) & 0x1FFFFFu), &ww4);
                     if (!q) break;
-                    uint32_t src = z < 2048u ? ((uint32_t *)d->cd_sect)[z / 4u]
-                                             : 0u;   /* CDDA/超区=零扇区(诚实面) */
+                    uint32_t src = z < d->cd_bytes ? ((uint32_t *)d->cd_sect)[z / 4u]
+                                             : 0u;   /* 楔55: 流内真扇, 超区=零(诚实面) */
                     *(uint32_t *)q = src;
                 }
                 d->i_stat |= 0x4u;                    /* CDINT (I_STAT bit2 正字) */
@@ -509,7 +509,7 @@ static void cd_cmd_exec(struct psx_dev_s *d0, uint8_t cmd)
             if (nsec > 8u) nsec = 8u;
             uint8_t tmp[8 * 2048];
             if (psx_disc_read((psx_disc_t *)d->disc, d->cd_loc, nsec, tmp) == 0) {
-                memcpy(d->cd_sect, tmp, 2048);
+                memcpy(d->cd_sect, tmp, nsec * 2048u);   /* 楔55: 全扇入流(旧丢尾扇) */
                 d->cd_bytes = nsec * 2048u; d->cd_sect_valid = 1;
                 d->cd_loc += nsec;                              /* 读后指针推进 */
             }
