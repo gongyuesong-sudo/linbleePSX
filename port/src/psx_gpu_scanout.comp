@@ -1,0 +1,32 @@
+#version 450
+// psx_gpu_scanout.comp —— 清洁房战役: GPU v1 Vulkan 硬件加速扫描核 (task-132)
+// 语义 = psx_gpu tick 的 CPU 参考实现位级同构:
+//   输入: PSX VRAM 16bpp (R5G6B5 系=RGB5551, 2 像素/字, 低半字=左像素), 行宽 1024 字
+//   输出: RGBA8888 帧缓冲 (0xAABBGGRR 字), 尺寸 size, 取样原点 origin
+//   disp_on=0 → 全黑场 (显示关)
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform Push {
+    ivec2 origin;      // VRAM 取样原点 (FB 原点+显示区起点)
+    ivec2 size;        // 输出帧尺寸
+    uint  words_row;   // VRAM 每行字数 (恒 1024=2048 像素)
+    uint  disp_on;
+    uint  pad0;
+    uint  pad1;
+} pc;
+
+layout(set = 0, binding = 0) readonly buffer VRAM  { uint px[]; }  vram;
+layout(set = 0, binding = 1) writeonly buffer FB   { uint outp[]; } fb;
+
+void main() {
+    uvec2 g = gl_GlobalInvocationID.xy;
+    if (g.x >= uint(pc.size.x) || g.y >= uint(pc.size.y)) return;
+    uint idx = uint(g.y + pc.origin.y) * pc.words_row + uint(g.x + pc.origin.x);
+    uint word = vram.px[idx >> 1];
+    uint c = ((idx & 1u) != 0u) ? (word >> 16) : (word & 0xFFFFu);
+    uint r  = (c & 0x1Fu) << 3;
+    uint gg = ((c >> 5) & 0x1Fu) << 3;
+    uint b  = ((c >> 10) & 0x1Fu) << 3;
+    uint argb = (pc.disp_on != 0u) ? (0xFF000000u | (b << 16) | (gg << 8) | r) : 0xFF000000u;
+    fb.outp[uint(g.y) * uint(pc.size.x) + uint(g.x)] = argb;
+}

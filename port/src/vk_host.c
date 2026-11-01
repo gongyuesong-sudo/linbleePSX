@@ -31,6 +31,7 @@ typedef struct {
     VkSurfaceKHR  surf;
     VkSwapchainKHR sc;
     VkFormat      fmt;
+    void         *hw;   /* 清洁房楔5: vk_hw_t* compute 扫描通道 */
     VkExtent2D    ext;
     VkImage       imgs[MAX_IMGS];
     VkImageView   views[MAX_IMGS];
@@ -356,4 +357,196 @@ void vk_close(void *v)
     if (!v) return;
     vk_host_shutdown((vk_host *)v);
     free(v);
+}
+
+/* ============ 清洁房楔5 (task-132): GPU 硬件扫描通道 ============
+ * vk_host_present_gpu16: PSX VRAM(16bpp) 上载 device buffer → compute
+ * (psx_gpu_scanout.comp: 5551→RGBA8, 零 CPU 逐像素转换/零读回) → buffer→image
+ * copy → 既有 blit/present。CPU 侧仅一次 DMA 风格 memcpy 上载。 */
+#include "psx_gpu_scanout_spv.h"
+
+typedef struct {
+    VkBuffer        inb, outb;        /* in=1MB VRAM, out=w*h*4 */
+    VkDeviceMemory  inb_m, outb_m;
+    void           *inb_map;
+    VkImage         outimg;           /* R8G8B8A8 | B8G8R8A8 依 host.fmt */
+    VkDeviceMemory  outimg_m;
+    VkImageView     outview;
+    VkShaderModule  mod;
+    VkDescriptorSetLayout dsl;
+    VkPipelineLayout        pl;
+    VkDescriptorPool        dp;
+    VkDescriptorSet         ds;
+    VkPipeline              pipe;
+    uint32_t out_w, out_h;
+    int      ready;
+} vk_hw_t;
+
+static int hw_alloc_buf(vk_host *h, VkDeviceSize sz, VkBufferUsageFlags use,
+                        VkBuffer *b, VkDeviceMemory *m, void **map)
+{
+    VkBufferCreateInfo bi = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = sz, .usage = use, .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
+    if (vkCreateBuffer(h->dev, &bi, NULL, b) != VK_SUCCESS) return -1;
+    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(h->dev, *b, &mr);
+    VkMemoryAllocateInfo ai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mr.size };
+    VkPhysicalDeviceMemoryProperties mp; vkGetPhysicalDeviceMemoryProperties(h->pd, &mp);
+    ai.memoryTypeIndex = 0xFFFFFFFFu;
+    VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && ai.memoryTypeIndex == 0xFFFFFFFFu; i++)
+        if ((mr.memoryTypeBits >> i) & 1 && (mp.memoryTypes[i].propertyFlags & want) == want) ai.memoryTypeIndex = i;
+    if (ai.memoryTypeIndex == 0xFFFFFFFFu) return -1;
+    if (vkAllocateMemory(h->dev, &ai, NULL, m) != VK_SUCCESS) return -1;
+    if (vkBindBufferMemory(h->dev, *b, *m, 0) != VK_SUCCESS) return -1;
+    if (map) { if (vkMapMemory(h->dev, *m, 0, sz, 0, map) != VK_SUCCESS) return -1; }
+    return 0;
+}
+
+static int hw_init(vk_host *h)
+{
+    vk_hw_t *w = calloc(1, sizeof *w);
+    if (!w) return -1;
+    if (hw_alloc_buf(h, 1024u * 512u * 2u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                     &w->inb, &w->inb_m, &w->inb_map) != 0) { free(w); return -1; }
+    VkShaderModuleCreateInfo mi = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = sizeof psx_scanout_spv, .pCode = psx_scanout_spv };
+    if (vkCreateShaderModule(h->dev, &mi, NULL, &w->mod) != VK_SUCCESS) { free(w); return -1; }
+    VkDescriptorSetLayoutBinding bnd[2] = {
+        { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+        { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT } };
+    VkDescriptorSetLayoutCreateInfo dli = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 2, .pBindings = bnd };
+    if (vkCreateDescriptorSetLayout(h->dev, &dli, NULL, &w->dsl) != VK_SUCCESS) { free(w); return -1; }
+    VkPushConstantRange pc = { .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT, .offset = 0, .size = 24 };
+    VkPipelineLayoutCreateInfo pl = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &w->dsl, .pushConstantRangeCount = 1, .pPushConstantRanges = &pc };
+    if (vkCreatePipelineLayout(h->dev, &pl, NULL, &w->pl) != VK_SUCCESS) { free(w); return -1; }
+    VkComputePipelineCreateInfo cp = { .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                   .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = w->mod, .pName = "main" },
+        .layout = w->pl };
+    if (vkCreateComputePipelines(h->dev, NULL, 1, &cp, NULL, &w->pipe) != VK_SUCCESS) { free(w); return -1; }
+    h->hw = w;
+    return 0;
+}
+
+static int hw_ensure_out(vk_host *h, uint32_t w, uint32_t hh)
+{
+    vk_hw_t *hw = (vk_hw_t *)h->hw;
+    if (hw->ready && hw->out_w == w && hw->out_h == hh) return 0;
+    if (hw->outb) { vkDestroyBuffer(h->dev, hw->outb, NULL); vkFreeMemory(h->dev, hw->outb_m, NULL); hw->outb = 0; }
+    if (hw->outimg) { vkDestroyImageView(h->dev, hw->outview, NULL); vkDestroyImage(h->dev, hw->outimg, NULL);
+                      vkFreeMemory(h->dev, hw->outimg_m, NULL); hw->outimg = 0; }
+    if (hw_alloc_buf(h, (VkDeviceSize)w * hh * 4u,
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     &hw->outb, &hw->outb_m, NULL) != 0) return -1;
+    VkImageCreateInfo ii = { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D, .format = h->fmt, .extent = { w, hh, 1 }, .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_LINEAR,
+        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED };
+    if (vkCreateImage(h->dev, &ii, NULL, &hw->outimg) != VK_SUCCESS) return -1;
+    VkMemoryRequirements mr; vkGetImageMemoryRequirements(h->dev, hw->outimg, &mr);
+    VkMemoryAllocateInfo ai = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mr.size };
+    VkPhysicalDeviceMemoryProperties mp; vkGetPhysicalDeviceMemoryProperties(h->pd, &mp);
+    ai.memoryTypeIndex = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && ai.memoryTypeIndex == 0xFFFFFFFFu; i++)
+        if ((mr.memoryTypeBits >> i) & 1 &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) ai.memoryTypeIndex = i;
+    if (ai.memoryTypeIndex == 0xFFFFFFFFu)
+        for (uint32_t i = 0; i < mp.memoryTypeCount && ai.memoryTypeIndex == 0xFFFFFFFFu; i++)
+            if ((mr.memoryTypeBits >> i) & 1) ai.memoryTypeIndex = i;
+    if (vkAllocateMemory(h->dev, &ai, NULL, &hw->outimg_m) != VK_SUCCESS) return -1;
+    if (vkBindImageMemory(h->dev, hw->outimg, hw->outimg_m, 0) != VK_SUCCESS) return -1;
+    VkImageViewCreateInfo vi = { .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = hw->outimg,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = h->fmt,
+        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
+    if (vkCreateImageView(h->dev, &vi, NULL, &hw->outview) != VK_SUCCESS) return -1;
+    if (!hw->dp) {
+        VkDescriptorPoolSize ps = { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 4 };
+        VkDescriptorPoolCreateInfo pi = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = 4, .poolSizeCount = 1, .pPoolSizes = &ps };
+        if (vkCreateDescriptorPool(h->dev, &pi, NULL, &hw->dp) != VK_SUCCESS) return -1;
+    } else vkResetDescriptorPool(h->dev, hw->dp, 0);
+    VkDescriptorSetAllocateInfo dsai = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = hw->dp, .descriptorSetCount = 1, .pSetLayouts = &hw->dsl };
+    if (vkAllocateDescriptorSets(h->dev, &dsai, &hw->ds) != VK_SUCCESS) return -1;
+    VkDescriptorBufferInfo bi[2] = { { .buffer = hw->inb, .offset = 0, .range = VK_WHOLE_SIZE },
+                                     { .buffer = hw->outb, .offset = 0, .range = VK_WHOLE_SIZE } };
+    VkWriteDescriptorSet wr[2] = {
+        { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = hw->ds, .dstBinding = 0,
+          .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi[0] },
+        { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = hw->ds, .dstBinding = 1,
+          .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi[1] } };
+    vkUpdateDescriptorSets(h->dev, 2, wr, 0, NULL);
+    hw->out_w = w; hw->out_h = hh; hw->ready = 1;
+    return 0;
+}
+
+int vk_host_present_gpu16(void *v, const uint16_t *vram, int ox, int oy, int w, int hgt, int disp_on)
+{
+    vk_host *h = (vk_host *)v;
+    if (!h || w <= 0 || hgt <= 0) return -1;
+    if (!h->hw && hw_init(h) != 0) return -1;
+    if (hw_ensure_out(h, (uint32_t)w, (uint32_t)hgt) != 0) return -1;
+    vk_hw_t *hw = (vk_hw_t *)h->hw;
+    memcpy(hw->inb_map, vram, 1024u * 512u * 2u);          /* 上载 (host-coherent, 一次) */
+    VKTRY(vkWaitForFences(h->dev, 1, &h->fence, VK_TRUE, UINT64_MAX));
+    vkResetFences(h->dev, 1, &h->fence);
+    vkResetCommandBuffer(h->cb, 0);
+    VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+    VKTRY(vkBeginCommandBuffer(h->cb, &bi));
+    /* 宿主写 → compute 读 屏障 */
+    VkBufferMemoryBarrier bb = { .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT, .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = hw->inb, .offset = 0, .size = VK_WHOLE_SIZE };
+    vkCmdPipelineBarrier(h->cb, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, NULL, 1, &bb, 0, NULL);
+    vkCmdBindPipeline(h->cb, VK_PIPELINE_BIND_POINT_COMPUTE, hw->pipe);
+    vkCmdBindDescriptorSets(h->cb, VK_PIPELINE_BIND_POINT_COMPUTE, hw->pl, 0, 1, &hw->ds, 0, NULL);
+    struct { int32_t ox, oy, w, hgt; uint32_t row, on, pad; } pc = { ox, oy, w, hgt, 1024u, (uint32_t)(disp_on ? 1 : 0), 0 };
+    vkCmdPushConstants(h->cb, hw->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(h->cb, (uint32_t)((w + 15) / 16), (uint32_t)((hgt + 15) / 16), 1);
+    /* compute → copy 屏障 + outimg 布局 */
+    VkBufferMemoryBarrier bb2 = { .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = hw->outb, .offset = 0, .size = VK_WHOLE_SIZE };
+    vkCmdPipelineBarrier(h->cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 1, &bb2, 0, NULL);
+    barrier(h->cb, hw->outimg, VK_IMAGE_LAYOUT_PREINITIALIZED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy cpy = { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageExtent = { (uint32_t)w, (uint32_t)hgt, 1 } };
+    vkCmdCopyBufferToImage(h->cb, hw->outb, hw->outimg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cpy);
+    barrier(h->cb, hw->outimg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    uint32_t idx = 0;
+    VkResult ar = vkAcquireNextImageKHR(h->dev, h->sc, UINT64_MAX, h->sem_avail, NULL, &idx);
+    if (ar == VK_ERROR_OUT_OF_DATE_KHR) { vkEndCommandBuffer(h->cb); return 0; }
+    if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) { vk_die("acquire", ar); return -1; }
+    barrier(h->cb, h->imgs[idx], h->lays[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageBlit bl = { .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .srcOffsets = { {0,0,0}, {w, hgt, 1} },
+        .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .dstOffsets = { {0,0,0}, { (int32_t)h->ext.width, (int32_t)h->ext.height, 1 } } };
+    vkCmdBlitImage(h->cb, hw->outimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   h->imgs[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_NEAREST);
+    barrier(h->cb, h->imgs[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    h->lays[idx] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    VKTRY(vkEndCommandBuffer(h->cb));
+    VkPipelineStageFlags wait = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1, .pWaitSemaphores = &h->sem_avail, .pWaitDstStageMask = &wait,
+        .commandBufferCount = 1, .pCommandBuffers = &h->cb,
+        .signalSemaphoreCount = 1, .pSignalSemaphores = &h->sem_done };
+    VKTRY(vkQueueSubmit(h->queue, 1, &si, h->fence));
+    VkPresentInfoKHR pi2 = { .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1, .pWaitSemaphores = &h->sem_done,
+        .swapchainCount = 1, .pSwapchains = &h->sc, .pImageIndices = &idx };
+    vkQueuePresentKHR(h->queue, &pi2);
+    h->frame++;
+    return 0;
 }

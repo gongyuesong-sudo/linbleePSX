@@ -3,12 +3,15 @@
  * 偏移域 = gpa - 0x1F800000。未登记偏移: 读 0 / 写丢弃(记录 last_unknown)。
  */
 #include "psx_dev.h"
+#include "psx_gpu.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct psx_dev_s;
 static void cd_cmd_exec(struct psx_dev_s *d, uint8_t cmd);
+static void gpu_gp0_fwd(void *g, uint32_t w);
+static void gpu_gp1_fwd(void *g, uint32_t w);
 
 /* ---- 楔6c trace 面: MMIO offset 直方图(单实例全局) ---- */
 #define MH 0x2500   /* 0x9400/4 */
@@ -34,6 +37,7 @@ void psx_dev_init(psx_dev_t *d)
     for (int i = 0; i < 4; i++) d->timer_target[i] = 0xFFFFu;
     /* 楔8b-① 上电复位 ACK: 驱动器就绪, CDINT0(I_STAT bit2)置位待 BIOS 使能 */
     d->cd_out[0]=d->cd_out[1]=d->cd_out[2]=d->cd_out[3]=0;
+    d->gpu = NULL; d->disc = NULL;
     d->cd_cmd=0; d->cd_cmds=0;
     d->i_stat |= 4u;
 }
@@ -132,8 +136,9 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
     case 0x1800:                                        /* GP0 push 深 4 满丢弃 */
         if (d->gp0_n < 4) { d->gp0_fifo[d->gp0_wp] = val;
             d->gp0_wp = (d->gp0_wp + 1) & 3; d->gp0_n++; }
+        if (d->gpu) gpu_gp0_fwd(d->gpu, val);            /* 楔5: 消费者转发 */
         break;
-    case 0x1804: d->gp1_last = val; break;
+    case 0x1804: d->gp1_last = val; if (d->gpu) gpu_gp1_fwd(d->gpu, val); break;
     default: break;
     }
 }
@@ -144,6 +149,9 @@ void psx_dev_write(psx_dev_t *d, uint32_t off, uint32_t val, int size)
 #include <stdlib.h>
 #include <string.h>
 void psx_dev_cd_attach(psx_dev_t *d, void *disc) { d->disc = disc; }
+static void gpu_gp0_fwd(void *g, uint32_t w) { psx_gpu_gp0((psx_gpu_t *)g, w); }
+static void gpu_gp1_fwd(void *g, uint32_t w) { psx_gpu_gp1((psx_gpu_t *)g, w); }
+void psx_dev_gpu_attach(void *dev, void *gpu) { ((psx_dev_t *)dev)->gpu = gpu; }
 
 static void cd_push(psx_dev_t *d, uint8_t b)
 { if (d->cd_resp_n < 8) d->cd_resp[d->cd_resp_n++] = b; }

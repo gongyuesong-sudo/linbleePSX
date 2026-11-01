@@ -41,6 +41,7 @@ typedef struct psx_dev_s {
     /* C2 私有握手窗 (docs/62) */
     uint32_t reg1044;
     uint32_t phase104a;         /* 双相位: 0→bit0, 1→bit1, 循环 */
+    void    *gpu;               /* 清洁房楔5: psx_gpu_t* (GP0/GP1 口转发, NULL=观测面) */
     /* GPU (docs/39 端口族): GP0 FIFO 深 4 */
     uint32_t gp0_fifo[4];
     int      gp0_wp, gp0_rp, gp0_n;
@@ -59,6 +60,8 @@ void     psx_dev_trace_reset(void);
 void     psx_dev_trace_dump(int topn);
 /* main.c 子命令入口 (--dev-selftest): 0=PASS */
 int      cmd_dev_selftest(int argc, char **argv);
+/* 清洁房楔5: GPU 附着 (GP0/GP1 口转发) */
+void     psx_dev_gpu_attach(void *dev, void *gpu);
 /* 清洁房楔3: 盘装载附着 + 集成探针 (psx_cdrom selftest 消费; 0=PASS) */
 void     psx_dev_cd_attach(psx_dev_t *d, void *disc /* psx_disc_t* */);
 int      psx_cd_dev_integration_probe(void);
