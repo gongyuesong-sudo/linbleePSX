@@ -311,3 +311,21 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   getter rootcall 该返 RAM 指针槽); NBA UNK a0:19/1b; 北斗神拳 disp=0 渲染路径未建帧。
 - 本楔宿主崩溃教训: EXC1ST dump `epc-0x80` 无门 → epc=0 时地址回绕; 任何以 guest 地址算窗口
   的诊断面必须 [0x80000000,0x88000000)+win==RAM 双门(与楔18 epcw 同规)。
+
+## 楔20 (SESSION-159): 北斗神拳 vsync→渲染派发链全景取证（方向钉死，实施留下楔）
+- 对照实验: RETAIL_RFE=1 对三国志2/打击者/NBA 均 200s 超时(帧首误跳风暴未除根) → 水位派发默认关维持。
+- 北斗神拳死环解剖(活体 RAM 反汇编, 文件镜像≠运行时三度实证: 0x80060548 文件=jal RAM=lui):
+  主线程 8003F530 轮询 [800D43A8](gp+0x3A8) 内核计数器 >0; 递增者=游戏 LIBSN 内核 vsync handler;
+  handler 触发权=BIOS VBlank 设备链。**tick 源正字**: [80075054]=0x1F801110 = 游戏直接轮询 Timer1 MMIO
+  (非 RAM 计数器; RWATCH 覆写实验钉死: 强写 54=计数器 → 游戏解引用崩 cause10×10787)。
+- BIOS 设备链设施已建: SysEnqIntRP/SysDeqIntRP **编号链**正字(游戏 enq(2,8007706c) 实证; PCB 活体
+  布局={pcb@0,func@4,next@8} 翻案 PsyQ 手册序); ChangeClearRCnt(c0:0A) 翻案旧 AddCblk 误登
+  (stubs.json 正名), 登记 VBlank 自动清零地址(80091054/800750c0 实证)。
+- **最后一层缺口钉死**: RETAIL_RP=1 链火 → 游戏 vsync handler 跳**自己复制进物理 0xDFAC 的 GPU
+  dispatcher**(RWATCH pc=8005c044 覆写我方桩实证; 内容=lw GPU 状态+andi 0x80 忙等)→ handler 所需
+  寄存器上下文($v1=GPU 基址类)未钉 → 万发 address error。方向正确、门控默认关待下楔:
+  钉 vsync handler 被 BIOS 调用时的 ABI 上下文(对照 hook 派发器 80051E10 路径)。
+- SWI0#8 低锚实验(EnableInterrupt 假说)**翻案**: 置 IE=1 触发派发链后游戏内核自算指针 a000DFAC 缺页
+  0xE00 → 万发风暴 → no-op 政策面保留(号义待钉)。
+- 诊断面: TRAP near[a0/v0+] 指针邻域 dump; RPFIRE/RPENQ/CLRRCNT 打点(RETAIL_RPTRACE 门控)。
+- 回归面: 八面 118P/0F; 北斗神拳 600M/三国志2 200M/打击者 200M/NBA 200M 全基线; 窗口 hw=1。

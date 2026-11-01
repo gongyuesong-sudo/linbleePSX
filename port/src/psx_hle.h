@@ -51,6 +51,8 @@ typedef struct psx_hle {
     int      heap_ready;
     /* 事件环 v1 槽 */
     struct { uint32_t class, vector; int enabled, fired; } ev[HLE_EV_MAX];
+    uint32_t sysrp[16];   /* SysEnqIntRP 编号中断回调链头 (task-159 楔20, PsyQ PCB next@+8) */
+    struct { uint32_t cnt; uint32_t addr; } clrcnt[8];   /* ChangeClearRCnt 登记表 (楔20) */
     /* Execute(first) 武装态 (task-131 接线主循环) */
     uint32_t exe_pc, exe_gp, exe_sp; int armed;
     void *disc;          /* psx_disc_t* (文件 API 消费; NULL=无盘) */
@@ -65,7 +67,8 @@ typedef struct psx_hle {
 int  psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core);
 void psx_hle_uninstall(psx_hle_t *h);
 /* CPU on_rootcall 钩实现: 1=已服务 0=走原异常路径 */
-void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick);  /* 60Hz 设备回调派发 (task-149) */
+void psx_hle_vblank_fire(psx_hle_t *h, uint32_t tick);
+void psx_hle_sysrp_fire(psx_hle_t *h);   /* VBlank 触发 SysEnqIntRP 编号链 #2 (楔20) */  /* 60Hz 设备回调派发 (task-149) */
 int  psx_hle_rootcall(psx_cpu_t *cpu);
 /* 内部堆 API (LoadImage 等复用; EvHeader=公开 PSX 堆头 5 word 布局) */
 uint32_t hle_heap_alloc(psx_hle_t *h, uint32_t size);   /* 返回 EvHeader* (guest) */

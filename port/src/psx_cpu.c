@@ -59,6 +59,10 @@ static int mem_rw(psx_cpu_t *c, uint32_t gpa, void **host, uint32_t sz, int stor
             return 0;
         }
     }
+    /* 楔20: 盘写 libsn tick 页 → 开启 BIOS vsync RAM 计数镜像维护 */
+    if (store) { uint32_t nm20 = gpa & 0x1FFFFFFFu;
+        if (nm20 >= 0x075050u && nm20 < 0x07505cu) {
+            extern int g_hle_tick_mirror; g_hle_tick_mirror = 1; } }
     /* 楔4 侦察: RAM 写侦测窗(BIOSRUN_WATCH=lo,hi 归一化地址) */
     if (store && g_watch_n < 400u) {
         uint32_t norm = gpa & 0x1FFFFFFFu;

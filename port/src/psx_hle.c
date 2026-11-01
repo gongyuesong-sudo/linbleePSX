@@ -376,7 +376,16 @@ static uint32_t hb_close_event(psx_hle_t *h, uint32_t cmd)
 HB_FLAG(hb_enable_event, enabled, 1)
 HB_FLAG(hb_disable_event, enabled, 0)
 HB_FLAG(hb_deliver_event, fired, 1)
-HB_FLAG(hb_wait_event, fired, 0)
+static uint32_t hb_wait_event(psx_hle_t *h, uint32_t cmd)
+{   /* B(0x0A) WaitEvent [S sys.s] — task-159 楔20 BIOS 语义:
+     * 真机 BIOS 在此陷入内服务 VBlank 设备链(SysEnqIntRP #2 → 游戏 vsync
+     * handler 递增内核计数器), 非单纯清标志。未 fired 且本帧 VBlank 已到
+     * (I_STAT bit0) → 先触发设备链再消费。 */
+    (void)cmd; int s = ev_slot(h, A_P(0));
+    if (s < 0) { V0(-1); return 0; }
+    if (!h->ev[s].fired && h->dev && (((psx_dev_t *)h->dev)->i_stat & 1u) && getenv("RETAIL_RP"))
+        psx_hle_sysrp_fire(h);   /* 楔20 同一实验门控 */
+    h->ev[s].fired = 0; V0(0); return 0; }
 static uint32_t hb_test_event(psx_hle_t *h, uint32_t cmd)
 { (void)cmd; int s = ev_slot(h, A_P(0)); V0(s >= 0 ? (uint32_t)h->ev[s].fired : 0); return 0; }
 /* GetC0Table/GetB0Table [R]: 指向 guest RAM 静态表 (内容 v1=桩地址数组) */
@@ -434,6 +443,25 @@ static uint32_t hb_return_from_exc(psx_hle_t *h, uint32_t cmd)
     V0(0u); return 0;
 }
 
+static uint32_t hc_add_cblk(psx_hle_t *h, uint32_t cmd);   /* fwd (副面复用) */
+static uint32_t hc_change_clear_rcnt(psx_hle_t *h, uint32_t cmd)
+{   /* C(0x0A) ChangeClearRCnt [S sys.s 正名](楔20): BIOS 于对应 RCnt 事件(VBlank)
+     * 自动清 *addr=0 —— 游戏以"读到 0 → 计帧"驱动 vsync 计数(北斗神拳
+     * enq(2)+rcnt(3, addr=800750C0) 实证)。旧误登 AddCblk 回调环语义保留为副面。 */
+    (void)cmd;
+    uint32_t cnt = A_P(0);
+    /* 参数位真盘实证不唯一(CALLTR=(3,0,800750C0), RPTRACE 另见 a2=小值)= 取首个
+     * RAM 指针形参为清零地址(低锚政策面, 号义无公开完整签名) */
+    uint32_t addr = (A_P(2) >= 0x80000000u && A_P(2) < 0x88000000u) ? A_P(2)
+                  : (A_P(1) >= 0x80000000u && A_P(1) < 0x88000000u) ? A_P(1) : 0u;
+    for (int z = 0; z < 8; z++)
+        if (h->clrcnt[z].addr == 0u || (h->clrcnt[z].cnt == cnt && h->clrcnt[z].addr == addr)) {
+            h->clrcnt[z].cnt = cnt; h->clrcnt[z].addr = addr; break; }
+    if (getenv("RETAIL_RPTRACE")) fprintf(stderr, "CLRRCNT cnt=%u addr=%08x\n", cnt, addr);
+    (void)hc_add_cblk(h, cmd);                          /* 副面: 旧 AddCblk 回调环登记保留 */
+    return 0;
+}
+
 static uint32_t hc_add_cblk(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd;
@@ -464,16 +492,36 @@ static uint32_t hc_sysinitmem(psx_hle_t *h, uint32_t cmd)
 }
 static uint32_t hc_enq(psx_hle_t *h, uint32_t cmd)
 {
-    (void)cmd; /* a0=list*, a1=entry* —— v1 记账链自研: [entry]=list, list=head */
-    uint32_t list = A_P(0), entry = A_P(1), head = hle_rd32(h, list);
-    hle_wr32(h, entry, head); hle_wr32(h, list, entry); V0(entry); return 0;
+    (void)cmd; /* a0=链号(<0x80000000)或 list*(老模式); a1=PCB*。
+        * task-159 楔20 正字: PsyQ PCB={func,pcb,next@+8} —— 编号链 next 写 +8,
+        * 绝不毁 func 槽(旧 next@+0 覆写 bug)。BIOS 于 VBlank 触发链 #2(实证游戏
+        * 唯一 enq 号=2, 北斗神拳); 链火 = psx_hle_sysrp_fire。 */
+    uint32_t list = A_P(0), entry = A_P(1);
+    if (list < 0x80000000u && (list & 0xFu) == list) {   /* 编号链 */
+        uint32_t n = list & 0xFu, head = h->sysrp[n];
+        h->sysrp[n] = entry; hle_wr32(h, entry + 8u, head); V0(entry);
+        if (getenv("RETAIL_RPTRACE")) fprintf(stderr, "RPENQ n=%u entry=%08x old=%08x\n", n, entry, head);
+        return 0;
+    }
+    uint32_t head2 = hle_rd32(h, list);
+    hle_wr32(h, entry, head2); hle_wr32(h, list, entry); V0(entry); return 0;   /* 指针链旧契约 next@+0 (v11a) */
 }
 static uint32_t hc_deq(psx_hle_t *h, uint32_t cmd)
 {
     (void)cmd; uint32_t list = A_P(0), entry = A_P(1);
-    uint32_t head = hle_rd32(h, list);
-    if (head == entry) { hle_wr32(h, list, hle_rd32(h, entry)); V0(entry); return 0; }
-    while (head) { uint32_t nx = hle_rd32(h, head); if (nx == entry) { hle_wr32(h, head, hle_rd32(h, entry)); V0(entry); return 0; } head = nx; }
+    if (list < 0x80000000u && (list & 0xFu) == list) {   /* 编号链 (楔20 next@+8) */
+        uint32_t n = list & 0xFu, head = h->sysrp[n];
+        if (head == entry) { h->sysrp[n] = hle_rd32(h, entry + 8u); V0(entry); return 0; }
+        while (head) { uint32_t nx = hle_rd32(h, head + 8u);
+                       if (nx == entry) { hle_wr32(h, head + 8u, hle_rd32(h, entry + 8u)); V0(entry); return 0; }
+                       head = nx; }
+        V0(0); return 0;
+    }
+    uint32_t head2 = hle_rd32(h, list);
+    if (head2 == entry) { hle_wr32(h, list, hle_rd32(h, entry)); V0(entry); return 0; }
+    while (head2) { uint32_t nx = hle_rd32(h, head2);
+                    if (nx == entry) { hle_wr32(h, head2, hle_rd32(h, entry)); V0(entry); return 0; }
+                    head2 = nx; }
     V0(0); return 0;
 }
 
@@ -522,7 +570,7 @@ int psx_hle_install(psx_hle_t *h, psx_cpu_t *cpu, psx_core_t *core)
     h->b[0x50] = hb_card_idle;                             /* [S] _new_card */
     /* C [S] */
     h->c[0x02] = hc_enq; h->c[0x03] = hc_deq; h->c[0x07] = hc_install_exc;
-    h->c[0x08] = hc_sysinitmem; h->c[0x0A] = hc_add_cblk;  /* [S] AddCblk 60Hz 回调环 */
+    h->c[0x08] = hc_sysinitmem; h->c[0x0A] = hc_change_clear_rcnt;  /* [S] c0:0A=ChangeClearRCnt (stubs.json 正名, 楔20 翻案旧 AddCblk 误登) */
     /* C0/B0 表桩区: 清零可被 GetC0Table 消费 */
     for (uint32_t i = 0; i < 0x40u; i += 4u) { hle_wr32(h, HLE_C0_GPA + i, 0); hle_wr32(h, HLE_B0_GPA + i, 0); }
     /* 向量页: 0x80/0xA0/0xB0/0xC0 syscall; +4=jr $ra; +8=nop */
@@ -645,6 +693,16 @@ int psx_hle_rootcall(psx_cpu_t *cpu)
         h->last_vec = 0u; h->last_cmd = 2u;
         cpu->cop0[12] |= 0x401u; cpu->gpr[2] = 0u; h->nlog++;
         g_hle_depth--; return 1;
+    } else if (vec == 0u && cpu->gpr[4] == 8u) {
+        /* SWI0#8 EnableInterrupt [P 低锚政策面](task-159 楔20): 北斗神拳内核初始化
+         * 唯一陷入即此号(CALLTR 实证), 旧 BIOS 内核服务表该位=开中断; 本盘 IE 此后
+         * 仍=0 → vsync handler 永不跑 → 主线程等 [800D43A8] 计数器死环。
+         * 号义无 PSn00bSDK 公开名 = 低锚标注, 真机钉字留跨盘复验。 */
+        h->last_vec = 0u; h->last_cmd = 8u;
+        /* 楔20 实验翻案记录: 置 IE=1 触发派发器后游戏内核自算指针 a000DFAC(页缺
+         * 0xE00)→万发 address-error 风暴 → 号义非单纯开中断, 诚实 no-op 待钉。 */
+        cpu->gpr[2] = 0u; h->nlog++;
+        g_hle_depth--; return 1;
     } else { g_hle_depth--;
         if (getenv("SYSTR")) {   /* task-154: 未服务 syscall 现场(每形态首见) = 弹栈风暴根因取证 */
             static uint32_t sy_seen[1024]; static uint32_t sy_n;
@@ -745,6 +803,13 @@ int psx_hle_coldboot(psx_hle_t *h, void *disc0, uint32_t *entry_out)
     /* RFE 蹦床 (task-150): HookEntryInt 钩子 jr $ra 落此 → rfe 清 EXL 回 epc */
     hle_wr32(h, 0x800001A8u, 0x42000010u);           /* rfe */
     hle_wr32(h, 0x800001ACu, 0u);                     /* nop */
+    /* task-159 楔20: BIOS 物理 0xDFAC GPU rootcall dispatcher 等价桩。
+     * 北斗神拳自校验链把真机 BIOS ROM 该入口指针(a000DFAC)存进数据槽
+     * [80076188] 并 jr 之(TRAP epc=a000dfac 实证) → 本桩 = syscall 0x49
+     * (GPU_cw [R] 已服务) + jr $ra, 经 KSEG1 别名 translate 命中同物理页。 */
+    hle_wr32(h, 0x0000DFACu, (0x49u << 6) | 0x0Cu);  /* syscall 0x49 */
+    hle_wr32(h, 0x0000DFB0u, 0x03E00008u);           /* jr $ra */
+    hle_wr32(h, 0x0000DFB4u, 0u);                    /* nop */
     h->armed = 1; h->exe_pc = pc; h->exe_gp = gp; h->exe_sp = c->gpr[29];
     c->pc = c->npc - 4u;                          /* 复位簿记 */
     c->npc = pc; c->branch_pending = 0;
@@ -1271,6 +1336,19 @@ int cmd_retail_probe(int argc, char **argv)
                                 pv ? *(uint32_t*)pv : 9u, pv1 ? *(uint32_t*)pv1 : 9u);
                     }
                     fprintf(stderr, "\n");
+                    {   /* 楔20: a0/v0 指针邻域 dump(load 地址错定位) */
+                        uint32_t cand[2] = { cpu.gpr[4], cpu.gpr[2] };
+                        for (int cz = 0; cz < 2; cz++) {
+                            uint32_t cb2 = cand[cz] & ~0x1Fu;
+                            if (cb2 < 0x80000000u || cb2 >= 0x88000000u) continue;
+                            fprintf(stderr, "TRAP near[r%d+]=%08x:", cz, cb2);
+                            for (int qz2 = 0; qz2 < 8; qz2++) {
+                                void *qt2 = psx_translate(&core, cb2 + (uint32_t)qz2 * 4u, &wwt);
+                                fprintf(stderr, " %08x", (qt2 && wwt == PSX_WIN_RAM) ? *(uint32_t*)qt2 : 0xDEDu);
+                            }
+                            fprintf(stderr, "\n");
+                        }
+                    }
                     fprintf(stderr, "TRAP stack@sp:");
                     for (int qz = 0; qz < 16; qz++) {
                         void *qt = psx_translate(&core, (cpu.gpr[29] & ~3u) + (uint32_t)qz * 4u, &wwt);
@@ -1310,6 +1388,9 @@ int cmd_retail_probe(int argc, char **argv)
             g_watch_done_gpa = 0xFFFFFFFFu;
         }
         if (getenv("RETAIL_CB")) psx_hle_vblank_fire(&h, dev.vframes);   /* task-149 实验门控: 派发语义待真机钉, 默认关 */
+        if (getenv("RETAIL_RP")) psx_hle_sysrp_fire(&h);   /* 楔20 实验门控: 链火触发 vsync
+            * handler→游戏自复制 GPU dispatcher(物理 0xDFAC, RWATCH 8005c044 覆写我方桩实证),
+            * 但 handler 所需寄存器上下文未钉 → 万发风暴。语义正确方向, 上下文=下楔战役。 */
         {   /* task-152: BIOS VBlank 给已 enable 事件投递票(Test/WaitEvent 消费) */
             for (uint32_t z = 0; z < HLE_EV_MAX; z++)
                 if (h.ev[z].class != 0xFFFFFFFFu && h.ev[z].enabled) h.ev[z].fired = 1;
@@ -1424,6 +1505,70 @@ for (int z = 0; z < 48; z++) if (h.unk[z].cnt)
     psx_disc_close(&d); psx_core_free(&core);
     return 0;
 }
+/* task-159 楔20: BIOS VBlank 设备链 = SysEnqIntRP 编号链 #2 触发 (PsyQ PCB
+ * {func@0, pcb@4, next@8}; 真机 BIOS 于每 VBlank IRQ 依次 call func(pcb))。
+ * trampoline 复用 vblank_fire 手法: 深度护栏 + 30000 步预算 + 现场保存恢复。 */
+int g_hle_tick_mirror = 0;   /* 楔20: 盘写 tick 页检测(置位于 psx_cpu store) */
+void psx_hle_sysrp_fire(psx_hle_t *h)
+{
+    if (!h || !h->cpu || g_hle_depth > 2) return;
+    h->vblank_ticks++;                       /* 每 VBlank 一拍(镜像与回调共用) */
+    uint32_t head = h->sysrp[2];
+    if (head < 0x80000000u) {                /* 空链也要维护 tick 镜像 */
+        { extern int g_hle_tick_mirror;
+          if (g_hle_tick_mirror)
+              hle_wr32(h, 0x80075050u, (((psx_dev_t *)h->dev)->timer_cnt[1] & 0xFFFFu)); }
+        return;
+    }
+    psx_cpu_t *c = h->cpu;
+    g_hle_depth++;
+    uint32_t tramp = (c->gpr[29] - 64u) & ~3u;
+    uint32_t ww;
+    if (!psx_translate(h->core, tramp, &ww)) { g_hle_depth--; return; }
+    uint32_t save_pc = c->pc, save_npc = c->npc;
+    int save_pend = (int)c->branch_pending; uint32_t save_tgt = c->branch_target;
+    uint32_t save_ra = c->gpr[31];
+    hle_wr32(h, tramp, 0x03E00008u);
+    hle_wr32(h, tramp + 4u, 0u);
+    int guard = 0;
+    while (head >= 0x80000000u && guard++ < 16) {
+        /* PCB 活体钉字(楔20 翻案 PsyQ 手册序): 北斗神拳 enq(2) 节点
+         * [8007706c]={0, 80065270, 0} → 本世代 LIBSN 布局 {pcb@0, func@4, next@8} */
+        uint32_t pcb = hle_rd32(h, head), func = hle_rd32(h, head + 4u);
+        uint32_t next = hle_rd32(h, head + 8u);
+        if (func >= 0x80000000u && func < 0x88000000u) {
+            c->gpr[4] = pcb; c->gpr[31] = tramp;
+            c->branch_pending = 0;
+            c->pc = tramp; c->npc = func & ~3u;
+            int done = 0;
+            for (uint32_t st = 0; st < 400u; st++) {
+                psx_cpu_step(c);
+                if (c->pc == tramp && c->npc == tramp) { done = 1; break; }
+            }
+            if (getenv("RETAIL_RPTRACE")) {
+                fprintf(stderr, "RPFIRE node=%08x func=%08x done=%d pc=%08x npc=%08x ra=%08x\n",
+                        head, func, done, c->pc, c->npc, c->gpr[31]);
+            }
+            c->branch_pending = 0;
+        }
+        head = next;
+    }
+    /* BIOS VBlank: ChangeClearRCnt 登记地址自动清零 (楔20) */
+    for (int z = 0; z < 8; z++)
+        if (h->clrcnt[z].addr >= 0x80000000u) hle_wr32(h, h->clrcnt[z].addr, 0u);
+    /* 楔20 tick 镜像: 北斗神拳 libsn 读 [80075050]/[80075054] RAM 计数对
+     * (稳定双读+差值 pacing 实证 80051a04 环)。真机=BIOS vsync 服务递增该
+     * 镜像(MMIO T1 的 RAM 影子)。门控=盘曾写 tick 页 0x800750xx(跨盘防误触)。 */
+    { extern int g_hle_tick_mirror;
+      /* [80075054] 是游戏自写的 tick 源指针(80051b14 lw 后 deref 实证, 楔20
+       * 覆写=毁指针 cause10 翻案) → 镜像只落 [80075050]=T1 硬件计数影子 */
+      if (g_hle_tick_mirror)
+          hle_wr32(h, 0x80075050u, (((psx_dev_t *)h->dev)->timer_cnt[1] & 0xFFFFu)); }
+    c->pc = save_pc; c->npc = save_npc; c->gpr[31] = save_ra;
+    c->branch_pending = (uint32_t)save_pend; c->branch_target = save_tgt;
+    g_hle_depth--;
+}
+
 /* VBlank 60Hz 派发 (task-149): 遍历回调环, 每个同步执行至 trampoline 振荡点。
  * 现场保护 = 保存主循环 pc/npc/branch, 回调 ABI a0=event a1=class a2=id a3=gpu
  * 栈[sp+0x10]=data; 返回检测: 回调尾部 jr $ra 落 tramp 后 pc/npc 恒=tramp 振荡。
