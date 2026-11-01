@@ -411,6 +411,16 @@ void psx_dev_vframe(psx_dev_t *d)
             uint32_t tv = d->vframes;
             memcpy(q, &tv, 4);
         }
+        /* 楔33 实验(RETAIL_ISR50C2=1, 门控): 真机 BIOS EntryInt 面置 [800750C2]=1
+         * (ISR-active 标志, VBlankIntCB 8005202C 退出清零)。本盘 ISR 体每帧在跑
+         * 但入口标志无人置 → 主泵 51D68 门永 0 → idle。 */
+        if (getenv("RETAIL_ISR50C2")) {
+            void *q2 = psx_translate((const psx_core_t *)d->core, 0x800750C2u, &bw);
+            if (q2 && bw == PSX_WIN_RAM) {
+                unsigned short one = 1;
+                memcpy(q2, &one, 2);
+            }
+        }
     }
 }
 
