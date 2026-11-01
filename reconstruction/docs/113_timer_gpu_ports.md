@@ -923,3 +923,19 @@ rc=7723 reject=0 maxdepth=0 cw=7713 **UNK=0** gp0=7714 词命令流接入; 八�
   读文件头后其 payload 装载路未产出数据)。
 - 楔56 计划: CALLTR/文件族 rootcall 画像钉 overlay 的 open/read 是否失败
   (A 族文件口/LIBSN fs 面), 顺验 psx_disc_read 对 overlay 文件的 LBA 解析。
+
+## 楔56 (SESSION-193): 破闸后行为全图=游戏未发起 overlay 读; scratch 相撞定性
+- 运行期零额外 `psx_disc_read`(gdb 布防 vframe 后布防): 全部读=装载期目录扫描。
+  **游戏破闸后根本没发起 overlay 文件读**——零海非"读了没落", 是"没读"。
+- 终爆正字(enter_exception 源码钉): epc=c->pc(非 badv), `ins=582d5350`="PS-X EXE"
+  = 我方 `HLE_HDR_SCRATCH 0x801F0000`(loader 头暂存)被终态执行撞穿;
+  ra=80045908(EXE 数据段)=线程上下文壳。游戏若加载 overlay 到此址会覆盖 scratch
+  (后写覆盖,  benign)——scratch 宜挪离游戏可利用区(楔57 卫生项)。
+- EXC1ST dump base=801eff80 实钉: 游戏执行进 801EFFxx 期望 overlay 在场。
+- 末发 rootcall 画像(40M, 共23发): `vec=a0 cmd=80091928`(cmd 槽=EXE 数据段指针,
+  a1=0x20 a2=0x20943=133443=LBA 域数)经 `pc=80000080` EntryInt 入面——A0:0x0A
+  不在公开 stubs 表(诚实 UNK), 且此代 A 表无 0x0A 名。**a2 疑 overlay LBA 计数**。
+- 主链断点收敛: 门(63D88)破后游戏推进至 spawn/jr-table(`8005BEFC` 族)即终,
+  其"overlay 装载步骤"未产出任何读=装载前置条件未满足(疑 spawn 参数或
+  前序命令回执缺字段)。楔57: 单变量钉 457C8→45908 段控制流(哪条路跳过装载)。
+- 本楔纯取证, port 树零改动(楔55 态 266e62c)。
